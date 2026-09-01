@@ -52,6 +52,7 @@ scoring:
     starter: 5
     bug: 3
     enhancement: 3
+  label_points_cap: 15            # labels factor ceiling (report §11)
   label_aliases:                  # org conventions differ -> map to canonical names (report §10)
     good first issue: good_first_issue
     first-timers-only: first_timers_only

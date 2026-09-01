@@ -85,6 +85,7 @@ class ScoringConfig:
     unassigned: int
     no_linked_pr: int
     labels: dict[str, int]
+    label_points_cap: int
     label_aliases: dict[str, str]
     repo_pushed_days: int
     repo_pushed_window_days: int
@@ -200,6 +201,7 @@ def _parse_scoring(data: dict) -> ScoringConfig:
         unassigned=int(_get(data, "unassigned", 20, int, "scoring")),
         no_linked_pr=int(_get(data, "no_linked_pr", 15, int, "scoring")),
         labels=labels,
+        label_points_cap=int(_get(data, "label_points_cap", 15, int, "scoring")),
         label_aliases=aliases,
         repo_pushed_days=int(_get(data, "repo_pushed_days", 10, int, "scoring")),
         repo_pushed_window_days=int(_get(data, "repo_pushed_window_days", 30, int, "scoring")),
