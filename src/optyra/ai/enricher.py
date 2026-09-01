@@ -8,7 +8,6 @@ notification still goes out without a summary.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -81,9 +80,7 @@ def _strip_fences(text: str) -> str:
     return stripped.strip("` \n\t")
 
 
-def parse_enrichment(
-    raw: dict, *, allowed_codes: set[str], summary_max_chars: int
-) -> Enrichment | None:
+def parse_enrichment(raw: dict, *, allowed_codes: set[str], summary_max_chars: int) -> Enrichment | None:
     """Validate + sanitize one model response. None => invalid (caller retries/fails open)."""
     text = _extract_json_text(raw)
     if not text:
@@ -102,9 +99,7 @@ def parse_enrichment(
     lines = [line.strip() for line in summary.splitlines() if line.strip()]
     summary = " ".join(lines[:2])[:summary_max_chars]
     codes = [
-        code
-        for code in (data.get("reason_codes") or [])
-        if isinstance(code, str) and code in allowed_codes
+        code for code in (data.get("reason_codes") or []) if isinstance(code, str) and code in allowed_codes
     ][:3]
     difficulty = data.get("difficulty")
     if difficulty not in ALLOWED_DIFFICULTY:
@@ -158,8 +153,7 @@ class IssueEnricher:
             prompt = user_payload
             if attempt > 1:
                 prompt = (
-                    user_payload
-                    + '\n\nIMPORTANT: your previous reply was not valid JSON matching the '
+                    user_payload + "\n\nIMPORTANT: your previous reply was not valid JSON matching the "
                     'schema. Return ONLY one JSON object: {"summary": str, '
                     '"worth_attempting": bool, "reason_codes": [..], "difficulty": "easy|medium|hard|unclear"}'
                 )
@@ -173,7 +167,7 @@ class IssueEnricher:
             }
             try:
                 response = await self._client.post(self.url, json=body)
-            except (httpx.HTTPError, asyncio.TimeoutError, OSError) as exc:
+            except (TimeoutError, httpx.HTTPError, OSError) as exc:
                 last_error = f"transport: {exc!r}"
                 logger.warning("AI enrich transport failure (attempt %s): %r", attempt, exc)
                 continue

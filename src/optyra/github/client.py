@@ -13,8 +13,9 @@ import asyncio
 import logging
 import random
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -46,7 +47,7 @@ class RateLimited(GitHubError):
 
 
 def _iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse_gh_time(value: str | None) -> datetime | None:
@@ -90,7 +91,7 @@ class GitHubClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self) -> "GitHubClient":
+    async def __aenter__(self) -> GitHubClient:
         return self
 
     async def __aexit__(self, *exc) -> None:
@@ -197,7 +198,10 @@ class GitHubClient:
         }
         # /search/repositories has no created_at; no watermark early-stop here.
         return await self._paginate(
-            "/search/repositories", params=params, is_search=True, max_pages=max_pages,
+            "/search/repositories",
+            params=params,
+            is_search=True,
+            max_pages=max_pages,
             item_key="items",
         )
 

@@ -6,11 +6,12 @@ Upserts are dialect-aware (PostgreSQL in production, SQLite in tests).
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timedelta, timezone
-from typing import Any, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from sqlalchemy import and_, cast, delete, func, select, update
 from sqlalchemy import String as SAString
+from sqlalchemy import and_, cast, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,7 @@ from optyra.db.models import (
 
 
 def utcnow_aware() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class DAL:
@@ -38,25 +39,30 @@ class DAL:
     def _insert_on_conflict(self, model: type, values: dict, index_elements: Sequence[str]):
         dialect = self.session.bind.dialect.name if self.session.bind is not None else "postgresql"
         if dialect == "sqlite":
-            stmt = sqlite_insert(model).values(**values).on_conflict_do_nothing(
-                index_elements=list(index_elements)
+            stmt = (
+                sqlite_insert(model)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=list(index_elements))
             )
         else:
-            stmt = pg_insert(model).values(**values).on_conflict_do_nothing(
-                index_elements=list(index_elements)
+            stmt = (
+                pg_insert(model).values(**values).on_conflict_do_nothing(index_elements=list(index_elements))
             )
         return stmt
 
-    def _upsert(self, model: type, values: dict, index_elements: Sequence[str],
-                update_set: dict):
+    def _upsert(self, model: type, values: dict, index_elements: Sequence[str], update_set: dict):
         dialect = self.session.bind.dialect.name if self.session.bind is not None else "postgresql"
         if dialect == "sqlite":
-            stmt = sqlite_insert(model).values(**values).on_conflict_do_update(
-                index_elements=list(index_elements), set_=update_set
+            stmt = (
+                sqlite_insert(model)
+                .values(**values)
+                .on_conflict_do_update(index_elements=list(index_elements), set_=update_set)
             )
         else:
-            stmt = pg_insert(model).values(**values).on_conflict_do_update(
-                index_elements=list(index_elements), set_=update_set
+            stmt = (
+                pg_insert(model)
+                .values(**values)
+                .on_conflict_do_update(index_elements=list(index_elements), set_=update_set)
             )
         return stmt
 
@@ -65,7 +71,9 @@ class DAL:
     async def upsert_org(self, login: str, tier: int, gsoc_years: list[int]) -> None:
         values = {"login": login, "tier": tier, "gsoc_years": gsoc_years, "created_at": utcnow()}
         stmt = self._upsert(
-            Org, values, ["login"],
+            Org,
+            values,
+            ["login"],
             {"tier": tier, "gsoc_years": gsoc_years},
         )
         await self.session.execute(stmt)
@@ -82,9 +90,7 @@ class DAL:
         )
 
     async def org_gsoc_score(self, login: str) -> int:
-        row = await self.session.execute(
-            select(Org.gsoc_score).where(Org.login == login)
-        )
+        row = await self.session.execute(select(Org.gsoc_score).where(Org.login == login))
         value = row.scalar_one_or_none()
         return int(value) if value is not None else 0
 
@@ -116,7 +122,9 @@ class DAL:
             "created_at": now,
         }
         stmt = self._upsert(
-            Repo, values, ["github_id"],
+            Repo,
+            values,
+            ["github_id"],
             {
                 "org_login": org_login,
                 "full_name": full_name,
@@ -137,21 +145,19 @@ class DAL:
         )
         demote = [gid for (gid,) in rows.all() if gid not in keep_ids]
         if demote:
-            await self.session.execute(
-                update(Repo).where(Repo.github_id.in_(demote)).values(monitored=False)
-            )
+            await self.session.execute(update(Repo).where(Repo.github_id.in_(demote)).values(monitored=False))
         return len(demote)
 
     async def monitored_repo_names(self) -> set[str]:
-        rows = await self.session.execute(
-            select(Repo.full_name).where(Repo.monitored.is_(True))
-        )
+        rows = await self.session.execute(select(Repo.full_name).where(Repo.monitored.is_(True)))
         return {name.lower() for (name,) in rows.all()}
 
+    async def monitored_repo_rows(self) -> dict[str, Repo]:
+        rows = await self.session.execute(select(Repo).where(Repo.monitored.is_(True)))
+        return {repo.full_name.lower(): repo for repo in rows.scalars().all()}
+
     async def find_repo(self, full_name: str) -> Repo | None:
-        row = await self.session.execute(
-            select(Repo).where(func.lower(Repo.full_name) == full_name.lower())
-        )
+        row = await self.session.execute(select(Repo).where(func.lower(Repo.full_name) == full_name.lower()))
         return row.scalar_one_or_none()
 
     async def mark_repo_unmonitored(self, full_name: str) -> None:
@@ -178,9 +184,7 @@ class DAL:
     async def insert_issue(self, values: dict) -> bool:
         """Insert-if-new on the composite PK. Returns True when the row is new."""
         values = {"first_seen_at": utcnow(), **values}
-        stmt = self._insert_on_conflict(
-            Issue, values, ["repo_full_name", "number"]
-        )
+        stmt = self._insert_on_conflict(Issue, values, ["repo_full_name", "number"])
         result = await self.session.execute(stmt)
         return (result.rowcount or 0) > 0
 
@@ -244,9 +248,7 @@ class DAL:
     async def mark_notification_sent(self, issue_key: str, channel: str) -> None:
         await self.session.execute(
             update(Notification)
-            .where(
-                Notification.issue_key == issue_key, Notification.channel == channel
-            )
+            .where(Notification.issue_key == issue_key, Notification.channel == channel)
             .values(sent_at=utcnow())
         )
 
@@ -262,12 +264,11 @@ class DAL:
             return existing
         stmt = self._insert_on_conflict(
             PollState,
-            {"scope": scope, "watermark": watermark, "consecutive_failures": 0,
-             "updated_at": utcnow()},
+            {"scope": scope, "watermark": watermark, "consecutive_failures": 0, "updated_at": utcnow()},
             ["scope"],
         )
         await self.session.execute(stmt)
-        return (await self.get_poll_state(scope))  # type: ignore[return-value]
+        return await self.get_poll_state(scope)  # type: ignore[return-value]
 
     async def update_poll_state(
         self,
@@ -295,9 +296,7 @@ class DAL:
                 values["breaker_until"] = utcnow_aware() + timedelta(seconds=breaker_cooldown_seconds)
         if breaker_until is not None:
             values["breaker_until"] = breaker_until
-        await self.session.execute(
-            update(PollState).where(PollState.scope == scope).values(**values)
-        )
+        await self.session.execute(update(PollState).where(PollState.scope == scope).values(**values))
         refreshed = await self.get_poll_state(scope)
         assert refreshed is not None
         return refreshed
@@ -323,7 +322,7 @@ class DAL:
         triage: list[float] = []
         for labels, created_at, first_comment_at in rows.all():
             total += 1
-            label_set = {str(l).lower() for l in (labels or [])}
+            label_set = {str(name).lower() for name in (labels or [])}
             if label_set & gfi_labels:
                 gfi += 1
             if created_at and first_comment_at:
@@ -335,9 +334,7 @@ class DAL:
     # ------------------------------------------------------------------ maintenance
 
     async def prune(self, *, issues_before: datetime, notifications_before: datetime) -> tuple[int, int]:
-        res_issues = await self.session.execute(
-            delete(Issue).where(Issue.first_seen_at < issues_before)
-        )
+        res_issues = await self.session.execute(delete(Issue).where(Issue.first_seen_at < issues_before))
         res_notifs = await self.session.execute(
             delete(Notification).where(Notification.created_at < notifications_before)
         )

@@ -102,7 +102,6 @@ class NotifyConfig:
     instant_threshold: int
     digest_threshold: int
     digest_interval_seconds: int
-    digest_max_age_seconds: int
     max_messages_per_minute: int
     sender_concurrency: int
 
@@ -182,17 +181,13 @@ class AppConfig:
 
 def _parse_scoring(data: dict) -> ScoringConfig:
     recency_raw = _get(data, "recency", {}, dict, "scoring")
-    recency = sorted(
-        (_parse_duration(str(k)), int(v)) for k, v in recency_raw.items()
-    )
+    recency = sorted((_parse_duration(str(k)), int(v)) for k, v in recency_raw.items())
     labels_raw = _get(data, "labels", {}, dict, "scoring")
     labels = {str(k): int(v) for k, v in labels_raw.items()}
     aliases_raw = _get(data, "label_aliases", {}, dict, "scoring")
     aliases = {str(k).lower(): str(v) for k, v in aliases_raw.items()}
     stars_raw = _get(data, "stars", [], list, "scoring")
-    stars = sorted(
-        ((int(entry["min"]), int(entry["points"])) for entry in stars_raw), reverse=True
-    )
+    stars = sorted(((int(entry["min"]), int(entry["points"])) for entry in stars_raw), reverse=True)
     gsoc_raw = _get(data, "gsoc", {}, dict, "scoring")
     years_raw = _get(gsoc_raw, "years", {}, dict, "scoring.gsoc")
     years = sorted(((int(k), int(v)) for k, v in years_raw.items()), reverse=True)
@@ -249,9 +244,7 @@ def _load_yaml(path: Path) -> dict:
 
 def _secrets_from_env() -> Secrets:
     chat_ids_raw = os.environ.get("TELEGRAM_CHAT_ID", "")
-    chat_ids = tuple(
-        int(part) for part in chat_ids_raw.replace(" ", "").split(",") if part
-    )
+    chat_ids = tuple(int(part) for part in chat_ids_raw.replace(" ", "").split(",") if part)
     return Secrets(
         gh_token=os.environ.get("GH_TOKEN", ""),
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
@@ -283,24 +276,15 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
 
     poll_raw = _section(main_raw, "poll")
     poll = PollConfig(
-        tier1_interval_seconds=int(
-            _get(poll_raw, "tier1_interval_seconds", 180, int, "poll")
-        ),
-        tier2_interval_seconds=int(
-            _get(poll_raw, "tier2_interval_seconds", 720, int, "poll")
-        ),
+        tier1_interval_seconds=int(_get(poll_raw, "tier1_interval_seconds", 180, int, "poll")),
+        tier2_interval_seconds=int(_get(poll_raw, "tier2_interval_seconds", 720, int, "poll")),
         overlap_seconds=int(_get(poll_raw, "overlap_seconds", 120, int, "poll")),
         max_backfill_hours=int(_get(poll_raw, "max_backfill_hours", 24, int, "poll")),
         max_catchup_hours=int(_get(poll_raw, "max_catchup_hours", 72, int, "poll")),
-        catchup_window_seconds=int(
-            _get(poll_raw, "catchup_window_minutes", 60, int, "poll")
-        )
-        * 60,
+        catchup_window_seconds=int(_get(poll_raw, "catchup_window_minutes", 60, int, "poll")) * 60,
         page_size=int(_get(poll_raw, "page_size", 100, int, "poll")),
         breaker_failures=int(_get(poll_raw, "breaker_failures", 5, int, "poll")),
-        breaker_cooldown_seconds=int(
-            _get(poll_raw, "breaker_cooldown_seconds", 900, int, "poll")
-        ),
+        breaker_cooldown_seconds=int(_get(poll_raw, "breaker_cooldown_seconds", 900, int, "poll")),
         concurrency=int(_get(poll_raw, "concurrency", 4, int, "poll")),
     )
 
@@ -309,10 +293,7 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
         max_age_hours=int(_get(filters_raw, "max_age_hours", 72, int, "filters")),
         min_body_chars=int(_get(filters_raw, "min_body_chars", 50, int, "filters")),
         bot_author_suffixes=[
-            str(s)
-            for s in _get(
-                filters_raw, "bot_author_suffixes", ["bot"], list, "filters"
-            )
+            str(s) for s in _get(filters_raw, "bot_author_suffixes", ["bot"], list, "filters")
         ],
         bot_author_logins=[
             str(s)
@@ -325,8 +306,8 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
             )
         ],
         negative_labels=[
-            str(l).lower()
-            for l in _get(
+            str(label).lower()
+            for label in _get(
                 filters_raw,
                 "negative_labels",
                 ["question", "support", "invalid", "duplicate", "wontfix", "security"],
@@ -342,20 +323,9 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
     notify = NotifyConfig(
         instant_threshold=int(_get(notify_raw, "instant_threshold", 85, int, "notify")),
         digest_threshold=int(_get(notify_raw, "digest_threshold", 70, int, "notify")),
-        digest_interval_seconds=int(
-            _get(notify_raw, "digest_interval_minutes", 20, int, "notify")
-        )
-        * 60,
-        digest_max_age_seconds=int(
-            _get(notify_raw, "digest_max_age_hours", 6, int, "notify")
-        )
-        * 3600,
-        max_messages_per_minute=int(
-            _get(notify_raw, "max_messages_per_minute", 15, int, "notify")
-        ),
-        sender_concurrency=int(
-            _get(notify_raw, "sender_concurrency", 2, int, "notify")
-        ),
+        digest_interval_seconds=int(_get(notify_raw, "digest_interval_minutes", 20, int, "notify")) * 60,
+        max_messages_per_minute=int(_get(notify_raw, "max_messages_per_minute", 15, int, "notify")),
+        sender_concurrency=int(_get(notify_raw, "sender_concurrency", 2, int, "notify")),
     )
 
     telegram_raw = _section(main_raw, "telegram")
@@ -384,22 +354,15 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
             _get(maint_raw, "state_refresh_max_age_hours", 48, int, "maintenance")
         )
         * 3600,
-        state_refresh_batch=int(
-            _get(maint_raw, "state_refresh_batch", 50, int, "maintenance")
-        ),
-        prune_interval_seconds=int(
-            _get(maint_raw, "prune_interval_hours", 24, int, "maintenance")
-        )
-        * 3600,
+        state_refresh_batch=int(_get(maint_raw, "state_refresh_batch", 50, int, "maintenance")),
+        prune_interval_seconds=int(_get(maint_raw, "prune_interval_hours", 24, int, "maintenance")) * 3600,
         prune_after_days=int(_get(maint_raw, "prune_after_days", 90, int, "maintenance")),
     )
 
     ops_raw = _section(main_raw, "ops")
     ops = OpsConfig(
         healthcheck_url=str(_get(ops_raw, "healthcheck_url", "", str, "ops")),
-        healthcheck_timeout_seconds=int(
-            _get(ops_raw, "healthcheck_timeout_seconds", 10, int, "ops")
-        ),
+        healthcheck_timeout_seconds=int(_get(ops_raw, "healthcheck_timeout_seconds", 10, int, "ops")),
         healthz_host=str(_get(ops_raw, "healthz_host", "0.0.0.0", str, "ops")),
         healthz_port=int(_get(ops_raw, "healthz_port", 8080, int, "ops")),
     )

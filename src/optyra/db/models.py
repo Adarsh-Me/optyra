@@ -5,7 +5,7 @@ JSON columns use JSONB on PostgreSQL and plain JSON on SQLite (tests).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -26,7 +26,7 @@ JSONType = JSONB().with_variant(JSON(), "sqlite")
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):

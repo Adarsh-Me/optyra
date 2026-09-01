@@ -75,11 +75,14 @@ def _verdict_line(issue_ctx: dict) -> str:
     return f"🧭 ⚠️ Not recommended — {esc(reasons)}"
 
 
-def format_digest(items: list[dict]) -> list[str]:
-    """One ranked digest -> one or more <=4096-char messages. items sorted by score desc."""
+def build_digest(items: list[dict]) -> list[tuple[str, list[dict]]]:
+    """One ranked digest -> list of (message_text, items_in_this_chunk) with <=4096 chars.
+    Chunk membership is returned so the caller can mark exactly the delivered items."""
     header = f"📬 <b>Optyra digest</b> — {len(items)} new issue(s), ranked by score\n"
-    chunks: list[str] = []
+    cont_header = "📬 <b>Optyra digest (cont.)</b>\n"
+    chunks: list[tuple[str, list[dict]]] = []
     current = header
+    current_items: list[dict] = []
     for idx, item in enumerate(items, start=1):
         block = (
             f"\n<b>{idx}. {item['score']}</b> · "
@@ -90,13 +93,19 @@ def format_digest(items: list[dict]) -> list[str]:
         if summary:
             block += f"🤖 {esc(str(summary)[:160])}\n"
         block += _verdict_line(item) + "\n"
-        if len(current) + len(block) > _TG_SAFE_LENGTH and current != header:
-            chunks.append(current)
-            current = header.replace("Optyra digest", "Optyra digest (cont.)")
+        if len(current) + len(block) > _TG_SAFE_LENGTH and current_items:
+            chunks.append((current, current_items))
+            current = cont_header
+            current_items = []
         current += block
-    if current.strip() != header.strip():
-        chunks.append(current)
-    return chunks or [header]
+        current_items.append(item)
+    if current_items:
+        chunks.append((current, current_items))
+    return chunks
+
+
+def format_digest(items: list[dict]) -> list[str]:
+    return [text for text, _ in build_digest(items)]
 
 
 class TelegramNotifier:
@@ -133,9 +142,7 @@ class TelegramNotifier:
             "link_preview_options": {"is_disabled": True},
         }
         if button_url:
-            payload["reply_markup"] = {
-                "inline_keyboard": [[{"text": "Open Issue", "url": button_url}]]
-            }
+            payload["reply_markup"] = {"inline_keyboard": [[{"text": "Open Issue", "url": button_url}]]}
         ok = True
         for chat_id in self.chat_ids:
             ok = await self._send_one(chat_id, payload) and ok
@@ -144,9 +151,7 @@ class TelegramNotifier:
     async def _send_one(self, chat_id: int, payload: dict[str, Any]) -> bool:
         for attempt in (1, 2):
             try:
-                response = await self._client.post(
-                    "/sendMessage", json={**payload, "chat_id": chat_id}
-                )
+                response = await self._client.post("/sendMessage", json={**payload, "chat_id": chat_id})
             except httpx.HTTPError as exc:
                 logger.warning("telegram send failed (chat %s): %r", chat_id, exc)
                 return False
@@ -155,9 +160,7 @@ class TelegramNotifier:
             if response.status_code == 429 and attempt == 1:
                 retry_after = 1.0
                 try:
-                    retry_after = float(
-                        response.json().get("parameters", {}).get("retry_after", 1.0)
-                    )
+                    retry_after = float(response.json().get("parameters", {}).get("retry_after", 1.0))
                 except Exception:
                     pass
                 logger.warning("telegram 429; sleeping %.0fs", retry_after)
@@ -175,7 +178,7 @@ class TelegramNotifier:
     async def send_digest(self, items: list[dict]) -> int:
         """Returns the number of chunks successfully delivered."""
         delivered = 0
-        for chunk in format_digest(items):
-            if await self.send_message(chunk):
+        for text, _ in build_digest(items):
+            if await self.send_message(text):
                 delivered += 1
         return delivered

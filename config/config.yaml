@@ -89,7 +89,6 @@ notify:
   instant_threshold: 85           # score >= this: immediate Telegram message
   digest_threshold: 70            # digest_threshold <= score < instant_threshold: batched digest
   digest_interval_minutes: 20
-  digest_max_age_hours: 6         # pending digest items older than this get flushed anyway
   max_messages_per_minute: 15     # stay under Telegram's ~30 msg/min per-chat limit
   sender_concurrency: 2
 

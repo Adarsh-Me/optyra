@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from optyra.config import FiltersConfig
 from optyra.core.normalize import ParsedIssue
@@ -47,7 +47,7 @@ def hard_filter(
     now: datetime | None = None,
     repo_monitored: bool = True,
 ) -> FilterResult:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if issue.state != "open":
         return FilterResult(False, "closed")
     if issue.assignees:

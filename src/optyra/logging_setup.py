@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class SecretScrubber:
@@ -34,9 +34,7 @@ class _ScrubbingFilter(logging.Filter):
         record.msg = SCRUBBER.scrub(str(record.msg))
         if record.args:
             try:
-                record.args = tuple(
-                    SCRUBBER.scrub(str(a)) if isinstance(a, str) else a for a in record.args
-                )
+                record.args = tuple(SCRUBBER.scrub(str(a)) if isinstance(a, str) else a for a in record.args)
             except Exception:  # never let logging itself crash the app
                 pass
         return True
@@ -45,7 +43,7 @@ class _ScrubbingFilter(logging.Filter):
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -63,9 +61,13 @@ def setup_logging(level: str = "INFO", json_mode: bool | None = None) -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(_ScrubbingFilter())
-    handler.setFormatter(JsonFormatter() if json_mode else logging.Formatter(
-        "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    ))
+    handler.setFormatter(
+        JsonFormatter()
+        if json_mode
+        else logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
+    )
 
     root = logging.getLogger()
     root.handlers.clear()

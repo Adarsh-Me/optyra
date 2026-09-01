@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -46,14 +46,10 @@ async def ensure_schema(engine: AsyncEngine) -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        exists = await conn.execute(
-            text("SELECT value FROM meta WHERE key = 'schema_version'")
-        )
+        exists = await conn.execute(text("SELECT value FROM meta WHERE key = 'schema_version'"))
         row = exists.first()
         if row is None:
-            await conn.execute(
-                MetaInfo.__table__.insert().values(key="schema_version", value=SCHEMA_VERSION)
-            )
+            await conn.execute(MetaInfo.__table__.insert().values(key="schema_version", value=SCHEMA_VERSION))
         elif row[0] != SCHEMA_VERSION:
             logger.warning(
                 "database schema version %s differs from expected %s; continuing",
@@ -90,9 +86,7 @@ class WorkerLock:
     async def release(self) -> None:
         if self._conn is not None:
             try:
-                await self._conn.execute(
-                    text("SELECT pg_advisory_unlock(:k)"), {"k": ADVISORY_LOCK_KEY}
-                )
+                await self._conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": ADVISORY_LOCK_KEY})
             finally:
                 await self._conn.close()
                 self._conn = None

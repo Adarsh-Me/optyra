@@ -7,7 +7,7 @@ recency 25 · unassigned 20 · no linked open PR 15 · labels 15 · repo pushed 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from optyra.config import ScoringConfig
 from optyra.core.filters import body_quality_points, canonical_labels
@@ -23,7 +23,7 @@ class ScoreBreakdown:
 
 
 def recency_points(created_at: datetime, cfg: ScoringConfig, *, now: datetime | None = None) -> int:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     age_seconds = (now - created_at).total_seconds()
     points = 0
     for max_age, award in cfg.recency:  # ascending (30m, 2h, 6h, 24h)
@@ -57,7 +57,7 @@ def score_issue(
 ) -> ScoreBreakdown:
     """Pre-deep-check pass: call with defaults for assigned/linked flags, then re-score
     after the deep-check confirms them (report §1 step 3)."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     components: dict[str, int] = {}
     components["recency"] = recency_points(issue.created_at, cfg, now=now)
     components["unassigned"] = 0 if assigned else cfg.unassigned
@@ -65,9 +65,7 @@ def score_issue(
     components["labels"] = label_points(issue.labels, cfg)
     if repo_pushed_at is not None:
         age_days = (now - repo_pushed_at).total_seconds() / 86400
-        components["repo_activity"] = (
-            cfg.repo_pushed_days if age_days <= cfg.repo_pushed_window_days else 0
-        )
+        components["repo_activity"] = cfg.repo_pushed_days if age_days <= cfg.repo_pushed_window_days else 0
     else:
         components["repo_activity"] = 0
     components["stars"] = stars_points(repo_stars, cfg)
@@ -87,7 +85,7 @@ def map_gsoc_score(
 ) -> tuple[int, dict[str, int]]:
     """GSoC relevance score 0-100 (report §11): years 40 · mega-repo 20 ·
     newcomer-issue ratio 20 · triage-within-48h proxy 20."""
-    current_year = current_year or datetime.now(timezone.utc).year
+    current_year = current_year or datetime.now(UTC).year
     recent = [y for y in gsoc_years if current_year - 6 <= y <= current_year]
     years_points = 0
     for min_years, award in cfg.gsoc_years:  # descending: 6->40, 4->30, 2->20, 1->10
