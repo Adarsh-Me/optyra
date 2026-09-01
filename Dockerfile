@@ -8,6 +8,8 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
+# Bake default config (orgs.yaml etc.) into the image; CONFIG_PATH defaults to /app/config
+COPY config ./config
 RUN pip install --no-cache-dir . \
     && useradd --system --uid 10001 optyra \
     && chown -R optyra:optyra /app
