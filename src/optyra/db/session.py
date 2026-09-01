@@ -24,6 +24,8 @@ ADVISORY_LOCK_KEY = 0x4F50_5459  # "OPTY"
 
 def create_engine(database_url: str, *, pool_size: int = 5) -> AsyncEngine:
     """asyncpg URL: postgresql+asyncpg://user:pass@host:5432/dbname"""
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     kwargs: dict = {"echo": False}
