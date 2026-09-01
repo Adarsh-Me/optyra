@@ -1,0 +1,121 @@
+# Optyra main configuration. Secrets NEVER live here — use environment variables (see deploy/.env.example).
+# Every weight/threshold below is tunable without touching code (report §11).
+
+# --- Discovery (Job A: nightly repo sync) ---
+sync:
+  interval_hours: 24          # nightly repo discovery per org
+  min_stars: 2000             # search/repositories stars filter (report §3)
+  per_page: 100
+
+# --- Polling (Job B: tiered issue search, report 02prd §3) ---
+poll:
+  tier1_interval_seconds: 180     # priority orgs: every 3 min
+  tier2_interval_seconds: 720     # long tail: every 12 min
+  overlap_seconds: 120            # query watermark minus this (search-index lag + crash overlap)
+  max_backfill_hours: 24          # brand-new org: search this far back on first poll
+  max_catchup_hours: 72           # watermark older than this -> time-sliced catch-up
+  catchup_window_minutes: 60      # slice width during catch-up
+  page_size: 100
+  breaker_failures: 5             # consecutive failures before an org trips the circuit breaker
+  breaker_cooldown_seconds: 900   # breaker half-open cooldown
+  concurrency: 4                  # max org searches in flight
+
+# --- Filtering (report §10/§11 hard filters; score 0, never notified) ---
+filters:
+  max_age_hours: 72               # ignore issues older than this at first sighting
+  min_body_chars: 50
+  bot_author_suffixes: ["bot", "automation", "ci-bot"]
+  bot_author_logins: ["github-actions", "dependabot", "renovate-bot"]
+  negative_labels:
+    - question
+    - support
+    - invalid
+    - duplicate
+    - wontfix
+    - security
+
+# --- Contribution Opportunity Score, 0-100, capped (report §11) ---
+scoring:
+  recency:                        # age at first sighting -> points
+    30m: 25
+    2h: 20
+    6h: 12
+    24h: 6
+  unassigned: 20                  # after deep-check confirmation
+  no_linked_pr: 15                # after timeline deep-check
+  labels:
+    good_first_issue: 15
+    first_timers_only: 15
+    help_wanted: 10
+    beginner: 5
+    easy: 5
+    starter: 5
+    bug: 3
+    enhancement: 3
+  label_aliases:                  # org conventions differ -> map to canonical names (report §10)
+    good first issue: good_first_issue
+    first-timers-only: first_timers_only
+    good first issue 🌱: good_first_issue
+    help wanted: help_wanted
+    docs: docs
+    documentation: docs
+    beginner friendly: beginner
+    beginner-friendly: beginner
+    easy pick: easy
+    up-for-grabs: easy
+  repo_pushed_days: 10            # repo pushed within 30 days
+  repo_pushed_window_days: 30
+  stars:
+    - { min: 10000, points: 5 }
+    - { min: 5000, points: 3 }
+    - { min: 2000, points: 2 }
+  body_quality: 5                 # >=200 chars AND (code block | error text | numbered steps)
+
+  # --- GSoC relevance score (org-level, computed nightly, cached on issues; report §11) ---
+  gsoc:
+    years:                        # participations in last 6 years
+      6: 40
+      4: 30
+      2: 20
+      1: 10
+    mega_repo: 20                 # has repos >10k stars, actively maintained
+    newcomer_ratio: 20            # share of good-first-issue issues opened/month
+    triage: 20                    # median triage within 48h proxy
+
+# --- Notifications (report §9: notify only for score >= digest_threshold AND unassigned AND
+# no linked open PR; instant for >= instant_threshold, everything else queued for digest) ---
+notify:
+  instant_threshold: 85           # score >= this: immediate Telegram message
+  digest_threshold: 70            # digest_threshold <= score < instant_threshold: batched digest
+  digest_interval_minutes: 20
+  digest_max_age_hours: 6         # pending digest items older than this get flushed anyway
+  max_messages_per_minute: 15     # stay under Telegram's ~30 msg/min per-chat limit
+  sender_concurrency: 2
+
+telegram:
+  api_base: https://api.telegram.org
+  parse_mode: HTML
+
+# --- AI enrichment (report 02prd §4; criteria in config/ai_criteria.yaml) ---
+ai:
+  enabled: true
+  timeout_seconds: 20
+  max_retries: 2
+  max_body_chars: 3000
+  summary_max_chars: 220          # ~2 lines
+  model: gemini-2.0-flash         # default; AI_MODEL env overrides
+
+# --- Maintenance (report §6/§8/§9) ---
+maintenance:
+  state_refresh_interval_minutes: 60   # Job C: assignment/taken transitions, DB only
+  state_refresh_max_age_hours: 48      # only re-check issues younger than this
+  state_refresh_batch: 50
+  prune_interval_hours: 24
+  prune_after_days: 90
+
+# --- Ops (report §16) ---
+ops:
+  healthcheck_url: ""             # Healthchecks.io ping URL; empty disables (tests/dev)
+  healthcheck_timeout_seconds: 10
+  healthz_host: 0.0.0.0
+  healthz_port: 8080
