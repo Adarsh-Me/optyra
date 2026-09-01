@@ -30,8 +30,10 @@ class ParsedIssue:
 def _repo_full_name(item: dict) -> str | None:
     url = item.get("repository_url") or ""
     parts = url.rstrip("/").split("/")
-    if len(parts) >= 2:
-        return f"{parts[-2]}/{parts[-1]}"
+    if "repos" in parts:
+        tail = parts[parts.index("repos") + 1 :]
+        if len(tail) == 2 and all(tail):
+            return f"{tail[0]}/{tail[1]}"
     return None
 
 

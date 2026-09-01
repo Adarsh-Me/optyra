@@ -37,18 +37,22 @@ class DAL:
     # ------------------------------------------------------------------ upsert helpers
 
     def _insert_on_conflict(self, model: type, values: dict, index_elements: Sequence[str]):
+        """Insert-if-new; callers use .returning(pk) + scalar() to detect the conflict
+        (works identically on asyncpg and aiosqlite)."""
         dialect = self.session.bind.dialect.name if self.session.bind is not None else "postgresql"
-        if dialect == "sqlite":
-            stmt = (
-                sqlite_insert(model)
-                .values(**values)
-                .on_conflict_do_nothing(index_elements=list(index_elements))
-            )
-        else:
-            stmt = (
-                pg_insert(model).values(**values).on_conflict_do_nothing(index_elements=list(index_elements))
-            )
-        return stmt
+        stmt_cls = sqlite_insert if dialect == "sqlite" else pg_insert
+        pk = list(model.__table__.primary_key.columns)[0]
+        return (
+            stmt_cls(model)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=list(index_elements))
+            .returning(pk)
+        )
+
+    async def _execute_insert_if_new(self, model: type, values: dict, index_elements: Sequence[str]) -> bool:
+        stmt = self._insert_on_conflict(model, values, index_elements)
+        result = await self.session.execute(stmt)
+        return result.scalar() is not None
 
     def _upsert(self, model: type, values: dict, index_elements: Sequence[str], update_set: dict):
         dialect = self.session.bind.dialect.name if self.session.bind is not None else "postgresql"
@@ -184,9 +188,7 @@ class DAL:
     async def insert_issue(self, values: dict) -> bool:
         """Insert-if-new on the composite PK. Returns True when the row is new."""
         values = {"first_seen_at": utcnow(), **values}
-        stmt = self._insert_on_conflict(Issue, values, ["repo_full_name", "number"])
-        result = await self.session.execute(stmt)
-        return (result.rowcount or 0) > 0
+        return await self._execute_insert_if_new(Issue, values, ["repo_full_name", "number"])
 
     async def get_issue(self, repo_full_name: str, number: int) -> Issue | None:
         row = await self.session.execute(
@@ -237,13 +239,11 @@ class DAL:
 
     async def insert_notification(self, issue_key: str, channel: str) -> bool:
         """Insert-if-new on (issue_key, channel). False means someone already notified."""
-        stmt = self._insert_on_conflict(
+        return await self._execute_insert_if_new(
             Notification,
             {"issue_key": issue_key, "channel": channel, "created_at": utcnow()},
             ["issue_key", "channel"],
         )
-        result = await self.session.execute(stmt)
-        return (result.rowcount or 0) > 0
 
     async def mark_notification_sent(self, issue_key: str, channel: str) -> None:
         await self.session.execute(
@@ -335,8 +335,10 @@ class DAL:
 
     async def prune(self, *, issues_before: datetime, notifications_before: datetime) -> tuple[int, int]:
         res_issues = await self.session.execute(delete(Issue).where(Issue.first_seen_at < issues_before))
+        key_expr = Issue.repo_full_name + "#" + cast(Issue.number, SAString)
+        orphaned = ~select(Issue.number).where(key_expr == Notification.issue_key).exists()
         res_notifs = await self.session.execute(
-            delete(Notification).where(Notification.created_at < notifications_before)
+            delete(Notification).where((Notification.created_at < notifications_before) | orphaned)
         )
         return res_issues.rowcount or 0, res_notifs.rowcount or 0
 

@@ -167,6 +167,7 @@ class IssuePoller:
                 if breaker_until is not None and breaker_until > now:
                     self._schedule_next(org.login, now, interval)
                     return stats
+                stats.polled = 1  # this org's search actually ran
                 windows, catchup = self._compute_windows(watermark, now)
                 gsoc_score = await dal.org_gsoc_score(org.login)
                 try:

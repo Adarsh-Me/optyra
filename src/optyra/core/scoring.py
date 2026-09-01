@@ -64,6 +64,8 @@ def score_issue(
     components["no_linked_pr"] = 0 if linked_open_pr else cfg.no_linked_pr
     components["labels"] = label_points(issue.labels, cfg)
     if repo_pushed_at is not None:
+        if repo_pushed_at.tzinfo is None:  # sqlite (tests) returns naive datetimes
+            repo_pushed_at = repo_pushed_at.replace(tzinfo=UTC)
         age_days = (now - repo_pushed_at).total_seconds() / 86400
         components["repo_activity"] = cfg.repo_pushed_days if age_days <= cfg.repo_pushed_window_days else 0
     else:

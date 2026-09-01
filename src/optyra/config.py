@@ -152,6 +152,8 @@ class Secrets:
     telegram_bot_token: str
     telegram_chat_ids: tuple[int, ...]
     database_url: str
+    github_api_base: str
+    ai_api_base: str
     ai_api_key: str
     ai_model: str | None
     log_level: str
@@ -252,6 +254,8 @@ def _secrets_from_env() -> Secrets:
         database_url=os.environ.get(
             "DATABASE_URL", "postgresql+asyncpg://optyra:optyra@localhost:5432/optyra"
         ),
+        github_api_base=os.environ.get("GITHUB_API_BASE", "https://api.github.com"),
+        ai_api_base=os.environ.get("AI_API_BASE", "https://generativelanguage.googleapis.com"),
         ai_api_key=os.environ.get("AI_API_KEY", ""),
         ai_model=os.environ.get("AI_MODEL") or None,
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),

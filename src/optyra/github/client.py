@@ -66,6 +66,7 @@ class GitHubClient:
         rest_concurrency: int = 5,
         retries: int = _DEFAULT_RETRIES,
         sleep: Callable[[float], Any] = asyncio.sleep,
+        base_url: str = API_BASE,
     ) -> None:
         headers = {
             "Authorization": f"Bearer {token}",
@@ -74,7 +75,7 @@ class GitHubClient:
             "User-Agent": USER_AGENT,
         }
         self._client = httpx.AsyncClient(
-            base_url=API_BASE,
+            base_url=base_url,
             headers=headers,
             follow_redirects=True,  # renamed repos: 301 -> follow, report §16
             timeout=httpx.Timeout(30.0, connect=10.0),

@@ -68,8 +68,9 @@ class RepoSyncJob:
                 orgs = await dal.get_orgs()
         for org in orgs:
             try:
-                repos = await self.sync_org(org)
+                repos, demoted = await self.sync_org(org)
                 total_repos += repos
+                total_demoted += demoted
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -85,7 +86,8 @@ class RepoSyncJob:
         self.svc.health.last_sync_at = utcnow_aware().isoformat(timespec="seconds")
         return {"orgs": len(orgs), "repos": total_repos, "demoted": total_demoted}
 
-    async def sync_org(self, org: Org) -> int:
+    async def sync_org(self, org: Org) -> tuple[int, int]:
+        """Returns (kept_repo_count, demoted_count)."""
         items = await self.svc.gh.search_repositories(
             org.login, min_stars=self.cfg.sync.min_stars, per_page=self.cfg.sync.per_page
         )
@@ -110,7 +112,7 @@ class RepoSyncJob:
                     )
                 demoted = await dal.demote_missing_repos(org.login, keep_ids)
         logger.info("synced %s repos for %s (%s demoted)", len(keep_ids), org.login, demoted)
-        return len(keep_ids)
+        return len(keep_ids), demoted
 
     async def compute_gsoc(self, org: Org) -> None:
         """Cached org-level GSoC relevance score (report §11), recomputed nightly."""

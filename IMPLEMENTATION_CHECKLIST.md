@@ -87,7 +87,8 @@ plain asyncio scheduler (no Celery/queues) · Telegram Bot API · Gemini Flash (
 - [x] Release workflow: tag `v*` → multi-arch (amd64+arm64) image to GHCR.
 - [x] Optional self-hosted-runner deploy workflow on tags (friend's side, documented in runbook).
 
-## M12 — Tests (CI gate, 02prd §6)
+## M12 — Tests (CI gate, 02prd §6) — VERIFIED: 76/76 green on SQLite AND real Postgres 16;
+Docker image built and full container smoke test passed (mock GitHub/Telegram/Gemini → instant delivery observed)
 - [x] Unit: filters, scoring (incl. cap + weight overrides), GSoC mapping, normalize, config validation, token bucket (fake clock).
 - [x] GitHub client: Link pagination, early-stop by watermark, 5xx retry, Retry-After, rate-limit reset, 404.
 - [x] AI enricher: strict parse, JSON-repair retry, fail-open on timeout/garbage, reason-code sanitizing.
@@ -95,6 +96,8 @@ plain asyncio scheduler (no Celery/queues) · Telegram Bot API · Gemini Flash (
 - [x] DB: dedupe PKs, watermark upsert, pending digest, prune, notification conflicts (sqlite; Postgres run in CI service).
 - [x] **End-to-end pipeline integration test**: fake GitHub + fake AI + fake Telegram → sync → poll → filter → score → deep-check → enrich → instant + digest delivery → dedupe on second sweep → state refresh.
 - [x] Spike script (`scripts/spike.py`) — the report's Day-1 validation (discovery + 24 h search + score, print top 20).
+- [x] `scripts/mock_stack.py` + Docker smoke run: schema bootstrap on PG → watermark backfill → whitelist gate → sync → poll → deep-check → Gemini enrich → Telegram instant w/ button, noise filtered.
+- [x] `GITHUB_API_BASE` / `AI_API_BASE` env overrides (also enables GitHub Enterprise / proxies).
 
 ## M13 — Docs
 - [x] `README.md`: architecture, quickstart, config guide, env contract, testing, deploy handoff.

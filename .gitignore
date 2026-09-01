@@ -24,3 +24,6 @@ Thumbs.db
 data/
 *.sqlite*
 *.db
+
+# smoke artifacts
+scripts/smoke-tg.log

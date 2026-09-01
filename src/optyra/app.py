@@ -36,7 +36,12 @@ class App:
         self.session_factory = create_session_factory(self.engine)
         self.lock = WorkerLock(self.engine)
         self.bucket = TokenBucket(20)  # report §7: never exceed ~20 search req/min
-        self.gh = GitHubClient(cfg.secrets.gh_token, bucket=self.bucket, rest_concurrency=5)
+        self.gh = GitHubClient(
+            cfg.secrets.gh_token,
+            bucket=self.bucket,
+            rest_concurrency=5,
+            base_url=cfg.secrets.github_api_base,
+        )
         self.tg: TelegramNotifier | None = None
         if cfg.secrets.telegram_bot_token and cfg.secrets.telegram_chat_ids:
             self.tg = TelegramNotifier(
@@ -57,6 +62,7 @@ class App:
                 max_retries=cfg.ai.max_retries,
                 max_body_chars=cfg.ai.max_body_chars,
                 summary_max_chars=cfg.ai.summary_max_chars,
+                base_url=cfg.secrets.ai_api_base,
             )
         else:
             logger.warning("AI enrichment disabled (AI_API_KEY missing or ai.enabled=false)")
