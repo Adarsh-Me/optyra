@@ -36,7 +36,9 @@ def _strip_rejected_query_params(database_url: str) -> str:
     split = urlsplit(database_url)
     if not split.query:
         return database_url
-    kept = [(k, v) for k, v in parse_qsl(split.query, keep_blank_values=True) if k not in _ASYNCPG_REJECTED_PARAMS]
+    kept = [
+        (k, v) for k, v in parse_qsl(split.query, keep_blank_values=True) if k not in _ASYNCPG_REJECTED_PARAMS
+    ]
     if len(kept) == len(parse_qsl(split.query, keep_blank_values=True)):
         return database_url
     stripped = urlunsplit(split._replace(query=urlencode(kept)))
