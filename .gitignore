@@ -27,3 +27,7 @@ data/
 
 # smoke artifacts
 scripts/smoke-tg.log
+
+# local run/diagnostic logs (worker output, pytest runs, deploy debug)
+*.log
+worker_*.log

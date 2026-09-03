@@ -125,6 +125,23 @@ CI/CD: every PR runs `ruff` + `pytest` (Postgres service) + `docker build`; push
 tag `v*` builds a multi-arch (amd64 + arm64) image to GHCR; an optional self-hosted
 runner workflow deploys on tags with a healthz gate.
 
+## Deployment on Render (free tier)
+
+[`render.yaml`](render.yaml) is a Blueprint for a one-click deploy: New →
+Blueprint → connect your fork. Fill the secrets (`GH_TOKEN`,
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `DATABASE_URL` — a managed Postgres
+such as Neon/Aiven free tier; paste the URL as-is, incompatible query params
+like `sslmode` are stripped automatically), then deploy. Afterwards set the
+service's **Health Check Path to `/healthz`** (Settings → Health Checks) — the
+prober doubles as the free-tier keep-alive.
+
+Three behaviors make overlapping Render deploys safe (they used to kill every
+deploy): the worker **waits up to `ops.worker_lock_timeout_seconds`** (default
+180 s) for the previous instance's advisory lock instead of exiting, the old
+instance **releases the lock promptly on SIGTERM**, and the health endpoint
+follows **`$PORT`** when Render sets it. No Docker Command override needed —
+leave that field empty.
+
 ## Environment contract
 
 | Variable | Required | Meaning |

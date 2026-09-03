@@ -118,4 +118,7 @@ ops:
   healthcheck_url: ""             # Healthchecks.io ping URL; empty disables (tests/dev)
   healthcheck_timeout_seconds: 10
   healthz_host: 0.0.0.0
-  healthz_port: 8080
+  healthz_port: 8080              # overridden by $PORT when set (Render/Heroku-style PaaS)
+  worker_lock_timeout_seconds: 180  # how long a new instance waits for the
+                                  # previous instance's advisory lock during
+                                  # overlapping deploys (Render) before giving up

@@ -60,7 +60,10 @@ def test_invalid_tier_rejected(tmp_path, monkeypatch):
 
     shutil.copytree("config", tmp_path / "config")
     orgs = tmp_path / "config" / "orgs.yaml"
-    orgs.write_text(orgs.read_text(encoding="utf-8").replace("tier: 1", "tier: 9", 1))
+    orgs.write_text(
+        orgs.read_text(encoding="utf-8").replace("tier: 1", "tier: 9", 1),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("GH_TOKEN", "x" * 20)
     with pytest.raises(ConfigError, match="tier must be 1 or 2"):
         load_config(tmp_path / "config")
