@@ -1,0 +1,29 @@
+name: Deploy
+
+on:
+  push:
+    tags: ["v*"]
+
+# Optional: runs ONLY on a self-hosted runner registered on the deployment box with the
+# label `optyra` (see deploy/runbook.md §2). Until the friend registers the runner these
+# runs stay queued — harmless; delete this file if you deploy manually instead.
+# Rollback on failure = repoint OPTYRA_IMAGE to the previous tag (runbook §2).
+jobs:
+  deploy:
+    runs-on: [self-hosted, optyra]
+    steps:
+      - name: Pull and restart the stack
+        working-directory: /opt/optyra
+        run: |
+          docker compose --env-file .env -f deploy/docker-compose.yml pull worker
+          docker compose --env-file .env -f deploy/docker-compose.yml up -d worker
+      - name: Wait for healthz
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+              echo "healthy"; exit 0
+            fi
+            sleep 2
+          done
+          echo "worker failed healthcheck after deploy" >&2
+          exit 1

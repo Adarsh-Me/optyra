@@ -137,6 +137,7 @@ class OpsConfig:
     healthcheck_timeout_seconds: int
     healthz_host: str
     healthz_port: int
+    worker_lock_timeout_seconds: int
 
 
 @dataclass(frozen=True)
@@ -232,6 +233,17 @@ def _parse_orgs(data: dict) -> tuple[OrgEntry, ...]:
         years = [int(y) for y in _get(item, "gsoc_years", [], list, f"orgs.{login}")]
         entries.append(OrgEntry(login=login, tier=tier, gsoc_years=years))
     return tuple(entries)
+
+
+def _healthz_port(ops_raw: dict) -> int:
+    """Health endpoint port: `$PORT` wins when set (Render/Heroku-style PaaS),
+    otherwise the `ops.healthz_port` YAML value (default 8080, local dev)."""
+    try:
+        if int(os.environ.get("PORT") or 0) > 0:
+            return int(os.environ["PORT"])
+    except (TypeError, ValueError):
+        pass
+    return int(_get(ops_raw, "healthz_port", 8080, int, "ops"))
 
 
 def _load_yaml(path: Path) -> dict:
@@ -368,7 +380,8 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
         healthcheck_url=str(_get(ops_raw, "healthcheck_url", "", str, "ops")),
         healthcheck_timeout_seconds=int(_get(ops_raw, "healthcheck_timeout_seconds", 10, int, "ops")),
         healthz_host=str(_get(ops_raw, "healthz_host", "0.0.0.0", str, "ops")),
-        healthz_port=int(_get(ops_raw, "healthz_port", 8080, int, "ops")),
+        healthz_port=_healthz_port(ops_raw),
+        worker_lock_timeout_seconds=int(_get(ops_raw, "worker_lock_timeout_seconds", 180, int, "ops")),
     )
 
     secrets = _secrets_from_env()

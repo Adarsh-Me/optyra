@@ -85,13 +85,17 @@ class App:
         self.digest_job = DigestFlushJob(self.services)
         self.maintenance_job = MaintenanceJob(self.services)
         self._health_server = None
+        self.shutdown_event = asyncio.Event()
 
     # ------------------------------------------------------------------ lifecycle
 
     async def startup(self) -> None:
         await ensure_schema(self.engine)
-        if not await self.lock.acquire():
-            raise RuntimeError("another optyra worker already holds the advisory lock on this database")
+        if not await self.lock.acquire(timeout_seconds=float(self.cfg.ops.worker_lock_timeout_seconds)):
+            raise RuntimeError(
+                "another optyra worker still holds the advisory lock on this database "
+                f"after waiting {self.cfg.ops.worker_lock_timeout_seconds}s"
+            )
         await self._seed_orgs()
         self._health_server = start_health_server(
             self.health, self.cfg.ops.healthz_host, self.cfg.ops.healthz_port
@@ -133,14 +137,26 @@ class App:
         await self.startup()
         try:
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(self.poller.run_forever(), name="poller")
-                tg.create_task(self.sync_job.run_forever(), name="repo-sync")
-                tg.create_task(self.refresh_job.run_forever(), name="state-refresh")
-                tg.create_task(self.digest_job.run_forever(), name="digest-flush")
-                tg.create_task(self.maintenance_job.run_forever(), name="maintenance")
-                tg.create_task(self._ping_loop(), name="healthcheck-ping")
+                workers = [
+                    tg.create_task(self.poller.run_forever(), name="poller"),
+                    tg.create_task(self.sync_job.run_forever(), name="repo-sync"),
+                    tg.create_task(self.refresh_job.run_forever(), name="state-refresh"),
+                    tg.create_task(self.digest_job.run_forever(), name="digest-flush"),
+                    tg.create_task(self.maintenance_job.run_forever(), name="maintenance"),
+                    tg.create_task(self._ping_loop(), name="healthcheck-ping"),
+                ]
+                tg.create_task(self._shutdown_watcher(workers), name="shutdown-signal")
         finally:
             await self.shutdown()
+
+    async def _shutdown_watcher(self, workers: list[asyncio.Task]) -> None:
+        """On SIGTERM/SIGINT (Render deploy overlap, `docker stop`, Ctrl-C),
+        cancel the job tasks so `run()` exits through `shutdown()` — which
+        releases the advisory lock for the incoming instance."""
+        await self.shutdown_event.wait()
+        logger.info("shutdown signal received; stopping %d job task(s)", len(workers))
+        for task in workers:
+            task.cancel()
 
     async def _ping_loop(self) -> None:
         """Ping Healthchecks.io when sweeps are productive (dead-man switch, report §16)."""
@@ -167,14 +183,20 @@ def datetime_from_iso(value: str):
     return dt
 
 
-def install_signal_handlers() -> None:
+def install_signal_handlers(shutdown_event: asyncio.Event) -> None:
+    """Wire SIGINT/SIGTERM to the app's shutdown event.
+
+    PaaS hosts (Render, Fly, Heroku) send SIGTERM to the old instance during
+    overlapping deploys; handling it releases the advisory lock promptly so
+    the incoming instance can take over instead of timing out on it.
+    """
     loop = asyncio.get_running_loop()
     for sig_name in ("SIGINT", "SIGTERM"):
         sig = getattr(signal, sig_name, None)
         if sig is None:
             continue
         try:
-            loop.add_signal_handler(sig, lambda: None)
+            loop.add_signal_handler(sig, shutdown_event.set)
         except NotImplementedError:
             # Windows: default SIGINT -> KeyboardInterrupt is enough
             pass
@@ -194,6 +216,6 @@ async def run() -> None:
         cfg.poll.tier1_interval_seconds,
         cfg.poll.tier2_interval_seconds,
     )
-    install_signal_handlers()
     app = App(cfg)
+    install_signal_handlers(app.shutdown_event)
     await app.run()

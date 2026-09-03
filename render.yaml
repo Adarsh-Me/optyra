@@ -1,0 +1,41 @@
+# Render Blueprint: one-click deploy of the Optyra worker (report 02prd §2).
+#
+#   1. Render dashboard -> New -> Blueprint -> connect YOUR fork of optyra.
+#   2. Fill the secrets below (or set them afterwards under Environment).
+#   3. Deploy. Then set the service's Health Check Path to /healthz
+#      (dashboard -> Settings -> Health Checks) so Render's own prober
+#      doubles as the free-tier keep-alive.
+#
+# Why this works on free tier despite overlapping deploys: the worker waits
+# up to ops.worker_lock_timeout_seconds for the previous instance's advisory
+# lock (src/optyra/db/session.py) and the old instance releases it promptly
+# on SIGTERM (src/optyra/app.py) — the newcomer outlives the overlap instead
+# of crashing into it. No Docker Command override needed.
+
+services:
+  - type: web
+    name: optyra
+    runtime: docker
+    plan: free
+    region: singapore # closest to IST; any region works
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: GH_TOKEN
+        sync: false # fine-grained PAT, Public repositories (read-only)
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false # managed Postgres (Neon/Aiven free tier), plain URL, no query params
+      - key: AI_API_KEY
+        sync: false # optional: Gemini summaries, fail-open without it
+      - key: AI_MODEL
+        value: gemini-2.0-flash
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_JSON
+        value: "1"
