@@ -1,4 +1,4 @@
-"""Payload normalization tests."""
+"""Payload normalization tests (v2: author_type parsing)."""
 
 from __future__ import annotations
 
@@ -9,14 +9,20 @@ from optyra.core.normalize import parse_repo_item, parse_search_item
 def test_parse_issue_item():
     parsed = parse_search_item(make_issue_item(labels=("Good First Issue", "Bug")))
     assert parsed is not None
-    assert parsed.repo_full_name == "apache/kafka"
+    assert parsed.repo_full_name == "acme/widgets"
     assert parsed.number == 1
     assert parsed.labels == ["good first issue", "bug"]
     assert parsed.author == "alice"
+    assert parsed.author_type == "User"
     assert parsed.assignees == []
-    assert parsed.html_url == "https://github.com/apache/kafka/issues/1"
+    assert parsed.html_url == "https://github.com/acme/widgets/issues/1"
     assert "NullPointerException" in parsed.title
     assert parsed.raw["body"].startswith("When running")
+
+
+def test_parse_bot_author_type():
+    parsed = parse_search_item(make_issue_item(author="renovate[bot]", author_type="Bot"))
+    assert parsed.author_type == "Bot"
 
 
 def test_parse_issue_item_raw_body_truncated():
@@ -29,7 +35,7 @@ def test_parse_issue_item_raw_body_truncated():
 
 def test_pull_requests_rejected():
     item = make_issue_item()
-    item["pull_request"] = {"html_url": "https://github.com/apache/kafka/pull/1"}
+    item["pull_request"] = {"html_url": "https://github.com/acme/widgets/pull/1"}
     assert parse_search_item(item) is None
 
 
@@ -47,11 +53,11 @@ def test_assignees_and_labels_variants():
 
 
 def test_parse_repo_item():
-    parsed = parse_repo_item(make_repo_item("apache/kafka", stars=28000))
+    parsed = parse_repo_item(make_repo_item("acme/widgets", stars=28000))
     assert parsed is not None
     assert parsed.github_id > 0
-    assert parsed.org_login == "apache"
-    assert parsed.full_name == "apache/kafka"
+    assert parsed.org_login == "acme"
+    assert parsed.full_name == "acme/widgets"
     assert parsed.stars == 28000
     assert parsed.archived is False
     assert parsed.pushed_at is not None

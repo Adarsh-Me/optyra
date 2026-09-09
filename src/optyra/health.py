@@ -28,6 +28,7 @@ class HealthState:
     last_digest_flush_at: str | None = None
     pending_notifications: int = 0
     github_rate_remaining: int | None = None
+    config_hash: str = ""
     extra: dict = field(default_factory=dict)
 
     def snapshot(self) -> dict:

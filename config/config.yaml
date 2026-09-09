@@ -1,124 +1,145 @@
-# Optyra main configuration. Secrets NEVER live here — use environment variables (see deploy/.env.example).
-# Every weight/threshold below is tunable without touching code (report §11).
+# Optyra v2 configuration. Secrets NEVER live here — env vars only (see .env.example).
+# Everything below is tunable without touching code.
 
-# --- Discovery (Job A: nightly repo sync) ---
+# --- Repo discovery / quality gate (Job A: 6h; on-demand for first sightings) ---
 sync:
-  interval_hours: 24          # nightly repo discovery per org
-  min_stars: 2000             # search/repositories stars filter (report §3)
+  interval_hours: 6         # metadata refresh cadence; new repos are gated on-demand
+  min_stars: 10000          # THE star gate (client-side; search can't express it for issues)
   per_page: 100
 
-# --- Polling (Job B: tiered issue search, report 02prd §3) ---
+# --- Polling (Job B: single tier, v2 — 16 org queries + 1 combined pinned ~ 5.7 req/min) ---
 poll:
-  tier1_interval_seconds: 180     # priority orgs: every 3 min
-  tier2_interval_seconds: 720     # long tail: every 12 min
-  overlap_seconds: 120            # query watermark minus this (search-index lag + crash overlap)
-  max_backfill_hours: 24          # brand-new org: search this far back on first poll
-  max_catchup_hours: 72           # watermark older than this -> time-sliced catch-up
-  catchup_window_minutes: 60      # slice width during catch-up
+  interval_seconds: 180         # every org + the pinned scope, same lane
+  overlap_seconds: 120          # query watermark minus this (search-index lag + crash overlap)
+  max_backfill_hours: 24        # brand-new scope: search this far back on first poll
+  max_catchup_hours: 72         # watermark older than this -> time-sliced catch-up
+  catchup_window_minutes: 60    # slice width during catch-up
   page_size: 100
-  breaker_failures: 5             # consecutive failures before an org trips the circuit breaker
-  breaker_cooldown_seconds: 900   # breaker half-open cooldown
-  concurrency: 4                  # max org searches in flight
+  breaker_failures: 5           # consecutive failures before a scope trips the breaker
+  breaker_cooldown_seconds: 900
+  concurrency: 4                # max searches in flight
 
-# --- Filtering (report §10/§11 hard filters; score 0, never notified) ---
+# --- Filtering: hard reject (score 0, never notified) + soft "parked" demotion ---
 filters:
-  max_age_hours: 72               # ignore issues older than this at first sighting
+  max_age_hours: 72
   min_body_chars: 50
   bot_author_suffixes: ["bot", "automation", "ci-bot"]
   bot_author_logins: ["github-actions", "dependabot", "renovate-bot"]
-  negative_labels:
+  negative_labels:              # universally clear "not work": HARD reject
     - question
     - support
     - invalid
     - duplicate
     - wontfix
     - security
+    - stale
+    - lifecycle/stale
+    - upstream
+  soft_labels:                  # repo-culture "parked" labels: penalty + ⚠️, NEVER a drop
+    - needs triage
+    - needs-triage
+    - awaiting triage
+    - awaiting-triage
+    - needs more info
+    - needs-more-info
+    - needs-reproduction
+    - waiting on author
+    - waiting-on-author
+    - discussion
+    - rfc
 
-# --- Contribution Opportunity Score, 0-100, capped (report §11) ---
+# --- Contribution Opportunity Score v2, 0-100 (recalibrated for a 10k-star universe:
+#     old stars/repo-activity factors had become constants -> 15 dead points) ---
 scoring:
-  recency:                        # age at first sighting -> points
+  recency:                      # age at first sighting -> points
     30m: 25
     2h: 20
     6h: 12
     24h: 6
-  unassigned: 20                  # after deep-check confirmation
-  no_linked_pr: 15                # after timeline deep-check
-  labels:
-    good_first_issue: 15
-    first_timers_only: 15
-    help_wanted: 10
-    beginner: 5
-    easy: 5
-    starter: 5
+  unassigned: 20                # after deep-check confirmation
+  no_linked_pr: 15              # after timeline deep-check
+  labels:                       # real contribution signal — strongest discriminator now
+    good_first_issue: 20
+    first_timers_only: 20
+    help_wanted: 12
+    beginner: 6
+    easy: 6
+    starter: 6
     bug: 3
     enhancement: 3
-  label_points_cap: 15            # labels factor ceiling (report §11)
-  label_aliases:                  # org conventions differ -> map to canonical names (report §10)
+  label_points_cap: 20
+  label_aliases:
     good first issue: good_first_issue
     first-timers-only: first_timers_only
     good first issue 🌱: good_first_issue
     help wanted: help_wanted
-    docs: docs
-    documentation: docs
     beginner friendly: beginner
     beginner-friendly: beginner
     easy pick: easy
     up-for-grabs: easy
-  repo_pushed_days: 10            # repo pushed within 30 days
+  repo_pushed_days: 3           # every 10k repo is active -> 10 points became near-constant
   repo_pushed_window_days: 30
-  stars:
-    - { min: 10000, points: 5 }
-    - { min: 5000, points: 3 }
-    - { min: 2000, points: 2 }
-  body_quality: 5                 # >=200 chars AND (code block | error text | numbered steps)
+  stars:                        # tiers above the 10k floor (below = never watched anyway)
+    - { min: 50000, points: 5 }
+    - { min: 20000, points: 4 }
+    - { min: 10000, points: 3 }
+  body_quality: 5               # >=200 chars AND (code block | error text | numbered steps)
+  parked_penalty: 8             # subtracted on a filters.soft_labels hit
+  setup_minimal_bonus: 5        # AI verdict setup_weight=minimal -> rank preference
 
-  # --- GSoC relevance score (org-level, computed nightly, cached on issues; report §11) ---
-  gsoc:
-    years:                        # participations in last 6 years
-      6: 40
-      4: 30
-      2: 20
-      1: 10
-    mega_repo: 20                 # has repos >10k stars, actively maintained
-    newcomer_ratio: 20            # share of good-first-issue issues opened/month
-    triage: 20                    # median triage within 48h proxy
-
-# --- Notifications (report §9: notify only for score >= digest_threshold AND unassigned AND
-# no linked open PR; instant for >= instant_threshold, everything else queued for digest) ---
+# --- Notifications: two lanes + v2 flood defenses (nixpkgs-class repos are firehoses) ---
 notify:
-  instant_threshold: 85           # score >= this: immediate Telegram message
-  digest_threshold: 70            # digest_threshold <= score < instant_threshold: batched digest
+  instant_threshold: 85         # >= this: immediate Telegram (exempt from caps)
+  digest_threshold: 70          # 70..84 -> digest lane
   digest_interval_minutes: 20
-  max_messages_per_minute: 15     # stay under Telegram's ~30 msg/min per-chat limit
+  max_messages_per_minute: 15
   sender_concurrency: 2
+  per_owner_daily_cap: 5        # digest sends per owner per UTC day, budgeted best-first
+  digest_max_items: 20          # per-flush send cap; overflow suppressed (visible in funnel)
+  lane_signal_required: true    # digest lane needs a newcomer label OR AI worth=yes
+  instant_lane_bypasses_gate: true
 
 telegram:
   api_base: https://api.telegram.org
   parse_mode: HTML
 
-# --- AI enrichment (report 02prd §4; criteria in config/ai_criteria.yaml) ---
+# --- AI enrichment: candidates only, strict JSON, fail-open + v2 setup policy ---
 ai:
   enabled: true
   timeout_seconds: 20
   max_retries: 2
   max_body_chars: 3000
-  summary_max_chars: 220          # ~2 lines
-  model: gemini-2.0-flash         # default; AI_MODEL env overrides
+  summary_max_chars: 220
+  model: gemini-2.0-flash       # AI_MODEL env overrides
+  setup_filter_default: hard    # heavy -> DROP (user instruction: no heavy downloads)
+  org_setup_filter:             # per-org overrides (flip to 'soft' from funnel data)
+    llvm: hard
+    electron: hard
+    swiftlang: hard
+  prior_min_samples: 5          # repo history needed before a prior can gate anything
+  daily_call_cap: 300           # free-tier protection; beyond = fail-open (no AI), never blocked
+  keyword_screen: false         # optional weak gate ONLY on AI-down days (default off)
+  setup_keywords: ["xcode", "android ndk", "emulator", "cuda", "gpu", "proprietary", "specialized hardware"]
 
-# --- Maintenance (report §6/§8/§9) ---
+# --- Daily funnel self-report: tune 70/85 with data, not vibes ---
+funnel:
+  report_hour_utc: 21
+  report_enabled: true
+
+# --- Maintenance ---
 maintenance:
-  state_refresh_interval_minutes: 60   # Job C: assignment/taken transitions, DB only
-  state_refresh_max_age_hours: 48      # only re-check issues younger than this
+  state_refresh_interval_minutes: 60   # Job C: assignment/closed transitions, DB only
+  state_refresh_max_age_hours: 48
   state_refresh_batch: 50
   prune_interval_hours: 24
   prune_after_days: 90
+  metrics_keep_days: 30
 
-# --- Ops (report §16) ---
+# --- Ops ---
 ops:
-  healthcheck_url: ""             # Healthchecks.io ping URL; empty disables (tests/dev)
+  healthcheck_url: ""             # Healthchecks.io ping URL; empty disables
   healthcheck_timeout_seconds: 10
   healthz_host: 0.0.0.0
   healthz_port: 8080              # overridden by $PORT when set (Render/Heroku-style PaaS)
-  worker_lock_timeout_seconds: 180  # how long a new instance waits for the
-                                  # previous instance's advisory lock during
-                                  # overlapping deploys (Render) before giving up
+  worker_lock_timeout_seconds: 180  # how long a new instance waits for the previous
+                                    # instance's advisory lock during overlapping deploys

@@ -105,3 +105,38 @@ Docker image built and full container smoke test passed (mock GitHub/Telegram/Ge
 
 ## Explicit non-goals for v0.1 (per report §12/§20)
 Dashboard (phase 2), comment-contention mining, Discord/email channels, multi-user, GitHub App, GraphQL, webhooks, queues.
+
+---
+
+## v2 Addendum — "Mergeable-PR radar for the 17 mission targets" (2026-09-04, working tree, UNCOMMITTED per user)
+
+Spec agreed in chat with the second AI (converged review). Deliberate deviations from v1:
+
+- [x] **Watch set replaced**: 16 verified orgs (tensorflow, electron, godotengine, google-gemini,
+      neovim, opencv, django, python, swiftlang, webpack, FFmpeg, git, llvm, jenkinsci, NixOS,
+      dart-lang) + 3 pinned repos (laurent22/joplin — personal account, invisible to `org:`;
+      NixOS/nixpkgs + dart-lang/sdk — flicker immunity) + blocked owners (pytorch, rust-lang).
+      Intel/VideoLAN question answered "no".
+- [x] **`stars:`-in-query finding**: GitHub issue search cannot combine org:/repo: with stars:
+      (verified live: org:tensorflow+stars:>=10000 → nonsense totals). Star gate is CLIENT-SIDE
+      against repo metadata + **on-demand GET /repos** for unseen repos (kills the v1 24h
+      discovery race); discovery demoted to metadata-only at 6h.
+- [x] Single polling lane 180s (tiers dissolved): 16 org scopes + 1 combined `repo:a repo:b repo:c`
+      pinned scope ≈ 5.7 search req/min.
+- [x] Scoring recalibrated (stars >50k/20k/10k, activity 10→3, labels 15→20, setup-minimal +5,
+      parked −8); GSoC org score retired from gating (columns kept, idempotent v1→v2 ALTERs).
+- [x] Soft "parked" label family (`needs triage` etc.) = penalty+⚠️ never drop; hard adds
+      stale/upstream; bot check now `user.type == "Bot"` primary + suffix fallback.
+- [x] AI v2: `setup_weight` field (own-build=moderate calibrated per user), per-org hard/soft
+      policy (default hard: heavy DROPS), per-repo prior majority (fail-open default), daily
+      call cap 300, optional keyword screen (off), one JSON repair path.
+- [x] Flood defenses: per-owner 5/day digest budget filled best-first AT FLUSH TIME (arrival
+      order can't beat quality; instant lane exempt), digest size cap 20 → terminal suppressed
+      rows + "+N suppressed" footer; digest-lane gate = newcomer label OR worth=yes required
+      (85+ bypasses).
+- [x] Daily funnel self-report @21:00 UTC (metrics_daily table, per-owner seen/notified,
+      config_hash 8-hex in report + healthz for split-brain visibility); nightly watchlist log.
+- [x] Tests: 106 sqlite (3 PG-only skips) / 109 on Postgres 16; v1→v2 migration simulated on
+      live PG (data survives, columns added, idempotent).
+- [ ] NOT committed/pushed (user instruction). Friend's Render stays on v1 until this is pushed
+      by whoever owns the merge.

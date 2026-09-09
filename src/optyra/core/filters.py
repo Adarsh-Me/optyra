@@ -1,4 +1,7 @@
-"""Hard filters (report 01prd §10/§11): applied before scoring; any hit => never notified."""
+"""Hard filters (report §10/§11): applied before scoring; any hit => never notified.
+v2: bot detection prefers GitHub's `user.type == "Bot"`; convention labels ("needs
+triage" family) are SOFT demotions (score −8 + ⚠️ tag), never drops — repo label
+culture differs and hard-dropping on them silently loses legitimate work."""
 
 from __future__ import annotations
 
@@ -15,7 +18,10 @@ class FilterResult:
     reason: str | None = None
 
 
-def _is_bot(author: str | None, cfg: FiltersConfig) -> bool:
+def _is_bot(issue: ParsedIssue, cfg: FiltersConfig) -> bool:
+    if issue.author_type == "Bot":
+        return True
+    author = issue.author
     if not author:
         return False
     if author.lower() in {b.lower() for b in cfg.bot_author_logins}:
@@ -62,11 +68,20 @@ def hard_filter(
     age_hours = (now - issue.created_at).total_seconds() / 3600
     if age_hours > cfg.max_age_hours:
         return FilterResult(False, "too-old")
-    if _is_bot(issue.author, cfg):
+    if _is_bot(issue, cfg):
         return FilterResult(False, "bot-author")
     if len(issue.body) < cfg.min_body_chars:
         return FilterResult(False, "body-too-short")
     return FilterResult(True, None)
+
+
+def parked_hit(issue: ParsedIssue, cfg: FiltersConfig) -> str | None:
+    """v2 soft-negative: first maintainer-parked convention label on the issue, else None."""
+    soft = {label.lower() for label in cfg.soft_labels}
+    for label in issue.labels:
+        if label.lower() in soft:
+            return label.lower()
+    return None
 
 
 def body_quality_points(body: str) -> bool:

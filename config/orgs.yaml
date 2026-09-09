@@ -1,55 +1,48 @@
-# Organizations to monitor. Two roles: you curate this list; tiers control poll frequency
-# (report 02prd §3: tiered polling — tier 1 priority orgs poll fast, tier 2 is the long tail).
+# Optyra v2 — mission watch-set. The bot only searches INSIDE these orgs, and only
+# their >= 10k-star repos (gate in config.yaml sync.min_stars). The list is the ONLY
+# thing that changes when you retarget the bot — everything else is code.
 #
-#   login:      GitHub org login (required)
-#   tier:       1 = priority, 2 = long tail (required; keep <= ~25 orgs in tier 1)
-#   gsoc_years: GSoC participations, newest last. Used by the nightly GSoC relevance score
-#               (report §11). Values below are a best-effort starter seed — curate them once
-#               (30 min of work per the report) from the public GSoC archive lists.
+#   orgs:          GitHub org logins. `org:X is:issue is:open created:>=...` per org,
+#                  every poll cycle; the star gate is applied client-side against repo
+#                  metadata (GitHub's search does not support `stars:` in issue queries —
+#                  verified live 2026-09-03: `org:X + stars:>=N` returns ~0/1 nonsense).
+#                  Orgs keep MULTIPLE qualifying repos where they exist: tensorflow ->
+#                  tensorflow(199k) models(78k) tfjs(19k); python -> cpython(76k) mypy(21k).
+#   pinned_repos:  'owner/name' watched regardless of stars, polled via one combined
+#                  repo: OR-query every cycle. REQUIRED for laurent22/joplin (a personal
+#                  USER account — invisible to org: queries no matter what); the
+#                  nixpkgs/sdk pins also immune those repos to star-gate flicker.
+#   blocked_owners: safety net applied post-search (never `-/org:` in queries — flaky).
+#                  pytorch + rust-lang are the user's explicit exclusions; they are out
+#                  by construction anyway since they're not in orgs.
 #
-# Report guidance (02prd §3): <=25 orgs in tier 1 @ 3 min, the rest in tier 2 @ 12 min
-# keeps sustained search usage ~15 req/min, safely under the 30/min authenticated ceiling.
+# Rate math: 16 orgs + 1 combined pinned query = 17 search req / 180 s ~ 5.7 req/min
+# (GitHub search cap 30/min; our self-cap 20/min). No tiers in v2: one lane, one rate.
 
-orgs:
-  - login: apache
-    tier: 1
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: kubernetes
-    tier: 1
-    gsoc_years: [2021, 2022, 2023, 2024, 2025]
-  - login: llvm
-    tier: 1
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: rust-lang
-    tier: 1
-    gsoc_years: [2021, 2023, 2024, 2025]
-  - login: nodejs
-    tier: 1
-    gsoc_years: [2022, 2023, 2024, 2025]
-  - login: zulip
-    tier: 1
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: oppia
-    tier: 1
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: scikit-learn
-    tier: 1
-    gsoc_years: [2022, 2023, 2024, 2025]
-  - login: pytorch
-    tier: 2
-    gsoc_years: [2023, 2024, 2025]
-  - login: sympy
-    tier: 2
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: coq
-    tier: 2
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: blender
-    tier: 2
-    gsoc_years: [2020, 2021, 2022, 2023, 2024, 2025]
-  - login: gitlabhq
-    tier: 2
-    gsoc_years: [2020, 2021]
-  - login: mpi4py
-    tier: 2
-    gsoc_years: [2023, 2024, 2025]
+watch:
+  orgs:
+    - tensorflow        # tensorflow 199k · models 78k · tfjs 19k
+    - electron          # electron 123k
+    - godotengine       # godot 117k   (NOT "godot")
+    - google-gemini     # gemini-cli 107k  (NOT "google")
+    - neovim            # neovim 116k
+    - opencv            # opencv 91k
+    - django            # django 90k
+    - python            # cpython 76k · mypy 21k
+    - swiftlang         # swift 70k    (moved from apple/)
+    - webpack           # webpack 66k
+    - FFmpeg            # FFmpeg 64k
+    - git               # git 63k
+    - llvm              # llvm-project 40k
+    - jenkinsci         # jenkins 27k  (NOT "jenkins")
+    - NixOS             # nixpkgs 26k
+    - dart-lang         # sdk 11.3k    (also pinned below)
+  pinned_repos:
+    - laurent22/joplin  # 56k stars BUT owner.type=User -> org: can never see it
+    - NixOS/nixpkgs     # policy pin: gate-flicker immunity
+    - dart-lang/sdk     # policy pin: 11.3k sits near the 10k line
+  blocked_owners:
+    - pytorch
+    - rust-lang
+# NOTE: "Intel Video/Audio for Linux" was asked about and answered "no" by the user
+# (2026-09) — neither Intel's media stack (1k★, fails the gate) nor VideoLAN is listed.

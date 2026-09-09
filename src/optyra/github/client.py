@@ -13,7 +13,7 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -221,6 +221,42 @@ class GitHubClient:
             created = f"created:{_iso(since)}..{_iso(until)}"
         params = {
             "q": f"org:{org} is:issue is:open {created}",
+            "sort": "created",
+            "order": "desc",
+            "per_page": per_page,
+        }
+        return await self._paginate(
+            "/search/issues",
+            params=params,
+            is_search=True,
+            max_pages=max_pages,
+            stop_before=since,
+            item_key="items",
+        )
+
+    async def search_issues_repos(
+        self,
+        repos: Sequence[str],
+        *,
+        since: datetime,
+        until: datetime | None = None,
+        per_page: int = 100,
+        max_pages: int = 10,
+    ) -> list[dict]:
+        """One combined query for several exact repos (v2 pinned-repo scope).
+
+        Multiple `repo:` qualifiers OR together (verified against the live API), so all
+        pinned repos cost one request per cycle — and repos owned by personal accounts
+        (e.g. laurent22/joplin) become watchable even though `org:` can never see them.
+        """
+        if not repos:
+            return []
+        repo_terms = " ".join(f"repo:{name}" for name in repos)
+        created = f"created:>={_iso(since)}"
+        if until is not None:
+            created = f"created:{_iso(since)}..{_iso(until)}"
+        params = {
+            "q": f"{repo_terms} is:issue is:open {created}",
             "sort": "created",
             "order": "desc",
             "per_page": per_page,

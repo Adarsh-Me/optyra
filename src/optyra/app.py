@@ -66,7 +66,7 @@ class App:
             )
         else:
             logger.warning("AI enrichment disabled (AI_API_KEY missing or ai.enabled=false)")
-        self.health = HealthState()
+        self.health = HealthState(config_hash=cfg.config_hash)
         self.pinger = HealthcheckPinger(
             cfg.secrets.healthcheck_url or cfg.ops.healthcheck_url or None,
             timeout=cfg.ops.healthcheck_timeout_seconds,
@@ -101,9 +101,11 @@ class App:
             self.health, self.cfg.ops.healthz_host, self.cfg.ops.healthz_port
         )
         logger.info(
-            "optyra started: %s org(s), healthz on :%s, telegram=%s, ai=%s",
-            len(self.cfg.orgs),
+            "optyra started: %s org(s) + %s pinned repo(s), healthz on :%s, cfg %s, telegram=%s, ai=%s",
+            len(self.cfg.watch.orgs),
+            len(self.cfg.watch.pinned_repos),
             self.cfg.ops.healthz_port,
+            self.cfg.config_hash,
             "on" if self.tg else "off",
             "on" if self.enricher else "off",
         )
@@ -125,11 +127,23 @@ class App:
             self._health_server.shutdown()
 
     async def _seed_orgs(self) -> None:
+        """Upsert the watch set and reconcile removals: orgs/poll-scopes that dropped
+        out of orgs.yaml are deleted so the poller never keeps polling stale scopes."""
+        from optyra.jobs.issue_poll import PINNED_SCOPE
+
+        pinned_owners = {name.split("/")[0] for name in self.cfg.watch.pinned_repos}
+        valid_logins = {login.lower() for login in self.cfg.watch.orgs} | {o.lower() for o in pinned_owners}
+        valid_scopes = set(self.cfg.watch.orgs) | ({PINNED_SCOPE} if self.cfg.watch.pinned_repos else set())
         async with self.session_factory() as session:
             async with session.begin():
                 dal = DAL(session)
-                for entry in self.cfg.orgs:
-                    await dal.upsert_org(entry.login, entry.tier, entry.gsoc_years)
+                for entry_login in self.cfg.watch.orgs:
+                    await dal.upsert_org(entry_login)
+                removed_orgs, removed_scopes = await dal.reconcile_watch(valid_logins, valid_scopes)
+        if removed_orgs or removed_scopes:
+            logger.info(
+                "reconciled watch set: removed %s org(s), %s stale scope(s)", removed_orgs, removed_scopes
+            )
 
     # ------------------------------------------------------------------ run
 
@@ -210,11 +224,14 @@ async def run() -> None:
     SCRUBBER.register(cfg.secrets.telegram_bot_token)
     SCRUBBER.register(cfg.secrets.ai_api_key)
     logger.info(
-        "loaded config from %s (overlap=%ss, tier1=%ss, tier2=%ss)",
+        "loaded config from %s (hash=%s, overlap=%ss, interval=%ss, min_stars=%s, orgs=%s, pinned=%s)",
         cfg.config_dir,
+        cfg.config_hash,
         cfg.poll.overlap_seconds,
-        cfg.poll.tier1_interval_seconds,
-        cfg.poll.tier2_interval_seconds,
+        cfg.poll.interval_seconds,
+        cfg.sync.min_stars,
+        len(cfg.watch.orgs),
+        len(cfg.watch.pinned_repos),
     )
     app = App(cfg)
     install_signal_handlers(app.shutdown_event)

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from optyra.db.models import (
     Issue,
+    MetricsDaily,
     Notification,
     Org,
     PollState,
@@ -70,33 +71,32 @@ class DAL:
             )
         return stmt
 
-    # ------------------------------------------------------------------ orgs
+    # ------------------------------------------------------------------ orgs / watch set
 
-    async def upsert_org(self, login: str, tier: int, gsoc_years: list[int]) -> None:
-        values = {"login": login, "tier": tier, "gsoc_years": gsoc_years, "created_at": utcnow()}
-        stmt = self._upsert(
-            Org,
-            values,
-            ["login"],
-            {"tier": tier, "gsoc_years": gsoc_years},
-        )
+    async def upsert_org(self, login: str) -> None:
+        values = {"login": login, "created_at": utcnow()}
+        stmt = self._upsert(Org, values, ["login"], {"login": login})  # SET login=login: no-op update
         await self.session.execute(stmt)
 
     async def get_orgs(self) -> list[Org]:
         rows = await self.session.execute(select(Org).order_by(Org.login))
         return list(rows.scalars().all())
 
-    async def update_org_gsoc(self, login: str, score: int, components: dict) -> None:
-        await self.session.execute(
-            update(Org)
-            .where(Org.login == login)
-            .values(gsoc_score=score, gsoc_components=components, gsoc_computed_at=utcnow())
-        )
-
-    async def org_gsoc_score(self, login: str) -> int:
-        row = await self.session.execute(select(Org.gsoc_score).where(Org.login == login))
-        value = row.scalar_one_or_none()
-        return int(value) if value is not None else 0
+    async def reconcile_watch(self, valid_logins: set[str], valid_scopes: set[str]) -> tuple[int, int]:
+        """Drop orgs + poll_state scopes that are no longer in the watch config, so a
+        shrunk orgs.yaml doesn't keep polling deleted orgs forever (v2 startup).
+        Case-insensitive on org logins (GitHub names preserve case)."""
+        valid_logins = {login.lower() for login in valid_logins}
+        valid_scopes_lower = {scope.lower() for scope in valid_scopes}
+        org_rows = await self.session.execute(select(Org.login))
+        stale_logins = [login for (login,) in org_rows.all() if login.lower() not in valid_logins]
+        scope_rows = await self.session.execute(select(PollState.scope))
+        stale_scopes = [scope for (scope,) in scope_rows.all() if scope.lower() not in valid_scopes_lower]
+        if stale_logins:
+            await self.session.execute(delete(Org).where(Org.login.in_(stale_logins)))
+        if stale_scopes:
+            await self.session.execute(delete(PollState).where(PollState.scope.in_(stale_scopes)))
+        return len(stale_logins), len(stale_scopes)
 
     # ------------------------------------------------------------------ repos
 
@@ -111,6 +111,7 @@ class DAL:
         archived: bool,
         pushed_at: datetime | None,
         monitored: bool = True,
+        is_pinned: bool = False,
     ) -> None:
         now = utcnow()
         values = {
@@ -123,6 +124,7 @@ class DAL:
             "monitored": monitored,
             "pushed_at": pushed_at,
             "last_synced_at": now,
+            "is_pinned": is_pinned,
             "created_at": now,
         }
         stmt = self._upsert(
@@ -138,14 +140,18 @@ class DAL:
                 "monitored": monitored,
                 "pushed_at": pushed_at,
                 "last_synced_at": now,
+                "is_pinned": is_pinned,
             },
         )
         await self.session.execute(stmt)
 
     async def demote_missing_repos(self, org_login: str, keep_ids: set[int]) -> int:
-        """Repos of this org not in the latest discovery sync stop being monitored."""
+        """Repos of this org not in the latest discovery sync stop being monitored.
+        Pinned repos are never demoted here (pinned discovery keeps them fresh)."""
         rows = await self.session.execute(
-            select(Repo.github_id).where(Repo.org_login == org_login, Repo.monitored.is_(True))
+            select(Repo.github_id).where(
+                Repo.org_login == org_login, Repo.monitored.is_(True), Repo.is_pinned.is_(False)
+            )
         )
         demote = [gid for (gid,) in rows.all() if gid not in keep_ids]
         if demote:
@@ -169,19 +175,41 @@ class DAL:
             update(Repo).where(func.lower(Repo.full_name) == full_name.lower()).values(monitored=False)
         )
 
-    async def org_has_mega_repo(self, org_login: str, min_stars: int, pushed_within_days: int) -> bool:
-        cutoff = utcnow_aware() - timedelta(days=pushed_within_days)
-        row = await self.session.execute(
-            select(Repo.github_id)
-            .where(
-                func.lower(Repo.org_login) == org_login.lower(),
-                Repo.stars >= min_stars,
-                Repo.archived.is_(False),
-                Repo.pushed_at >= cutoff,
-            )
-            .limit(1)
+    # ------------------------------------------------------------------ setup-weight priors (v2)
+
+    async def record_setup_verdict(self, full_name: str, weight: str) -> None:
+        """Accumulate this repo's per-repo setup prior + refresh the majority value.
+
+        Keyed per repo (not per org): build environments differ within an org
+        (tensorflow vs tfjs)."""
+        repo = await self.find_repo(full_name)
+        if repo is None:
+            return
+        prior = dict(repo.setup_prior or {"minimal": 0, "moderate": 0, "heavy": 0})
+        prior[weight] = int(prior.get(weight, 0)) + 1
+        majority = self.majority_weight(prior)
+        await self.session.execute(
+            update(Repo)
+            .where(Repo.github_id == repo.github_id)
+            .values(setup_prior=prior, setup_weight=majority)
         )
-        return row.first() is not None
+
+    async def resolve_setup_prior(self, full_name: str, min_samples: int) -> str | None:
+        """The repo's majority setup weight once enough verdicts exist; None = unknown
+        (fail-open default). Used on AI-down days instead of letting heavy issues through."""
+        repo = await self.find_repo(full_name)
+        if repo is None or not repo.setup_prior:
+            return None
+        total = sum(int(v) for v in repo.setup_prior.values())
+        if total < min_samples:
+            return None
+        return repo.setup_weight or self.majority_weight(repo.setup_prior)
+
+    @staticmethod
+    def majority_weight(prior: dict) -> str | None:
+        if not prior or sum(int(v) for v in prior.values()) == 0:
+            return None
+        return max(prior.items(), key=lambda kv: int(kv[1]))[0]
 
     # ------------------------------------------------------------------ issues
 
@@ -252,6 +280,41 @@ class DAL:
             .values(sent_at=utcnow())
         )
 
+    async def mark_notification_suppressed(self, issue_key: str, channel: str) -> None:
+        """Terminal mark for budget/size-cap suppressions: the row never re-enters the
+        flush, and the suppression is visible in the daily funnel report."""
+        now = utcnow()
+        await self.session.execute(
+            update(Notification)
+            .where(Notification.issue_key == issue_key, Notification.channel == channel)
+            .values(sent_at=now, suppressed_at=now)
+        )
+
+    async def owner_digest_counts(
+        self, day_start: datetime, *, below_score: int | None = None
+    ) -> dict[str, int]:
+        """v2 flush-time budget input: digest notifications actually sent today, per
+        repo owner. `below_score` excludes instant-lane sends (they don't consume the
+        digest budget); suppressed rows never count."""
+        key_expr = Issue.repo_full_name + "#" + cast(Issue.number, SAString)
+        conditions = [
+            Notification.sent_at.isnot(None),
+            Notification.sent_at >= day_start,
+            Notification.suppressed_at.is_(None),
+        ]
+        if below_score is not None:
+            conditions.append(Issue.score < below_score)
+        rows = await self.session.execute(
+            select(Issue.repo_full_name)
+            .join(Notification, key_expr == Notification.issue_key)
+            .where(*conditions)
+        )
+        counts: dict[str, int] = {}
+        for (full_name,) in rows.all():
+            owner = full_name.split("/")[0].lower()
+            counts[owner] = counts.get(owner, 0) + 1
+        return counts
+
     # ------------------------------------------------------------------ poll_state
 
     async def get_poll_state(self, scope: str) -> PollState | None:
@@ -301,52 +364,68 @@ class DAL:
         assert refreshed is not None
         return refreshed
 
-    # ------------------------------------------------------------------ gsoc stats
+    # ------------------------------------------------------------------ funnel metrics (v2)
 
-    async def org_issue_stats(
-        self, org_login: str, since: datetime, gfi_labels: set[str]
-    ) -> tuple[int, int, list[float]]:
-        """(total_issues_since, good_first_issue_count, triage_hours_samples).
-
-        Triage proxy: hours from issue creation to first observed comment, for issues where
-        we captured a timeline (candidates only — a documented v1 limitation, report §11).
-        """
-        rows = await self.session.execute(
-            select(Issue.labels, Issue.created_at, Issue.first_comment_at).where(
-                func.lower(Issue.repo_full_name).startswith(org_login.lower() + "/"),
-                Issue.created_at >= since,
-            )
+    async def bump_funnel(self, day: str, key: str, amount: int = 1) -> None:
+        """Read-modify-write funnel counter for a UTC day (single worker: safe)."""
+        row = await self.session.execute(select(MetricsDaily.data).where(MetricsDaily.day == day))
+        data = dict(row.scalar_one_or_none() or {})
+        data[key] = int(data.get(key, 0)) + amount
+        stmt = self._upsert(
+            MetricsDaily,
+            {"day": day, "data": data, "updated_at": utcnow()},
+            ["day"],
+            {"data": data, "updated_at": utcnow()},
         )
-        total = 0
-        gfi = 0
-        triage: list[float] = []
-        for labels, created_at, first_comment_at in rows.all():
-            total += 1
-            label_set = {str(name).lower() for name in (labels or [])}
-            if label_set & gfi_labels:
-                gfi += 1
-            if created_at and first_comment_at:
-                hours = (first_comment_at - created_at).total_seconds() / 3600
-                if hours >= 0:
-                    triage.append(hours)
-        return total, gfi, triage
+        await self.session.execute(stmt)
+
+    async def read_funnel(self, day: str) -> dict:
+        row = await self.session.execute(select(MetricsDaily.data).where(MetricsDaily.day == day))
+        return dict(row.scalar_one_or_none() or {})
+
+    async def ai_calls_today(self, day: str) -> int:
+        funnel = await self.read_funnel(day)
+        return int(funnel.get("ai_calls", 0))
 
     # ------------------------------------------------------------------ maintenance
 
-    async def prune(self, *, issues_before: datetime, notifications_before: datetime) -> tuple[int, int]:
+    async def prune(
+        self,
+        *,
+        issues_before: datetime,
+        notifications_before: datetime,
+        metrics_before_day: str | None = None,
+    ) -> tuple[int, int, int]:
         res_issues = await self.session.execute(delete(Issue).where(Issue.first_seen_at < issues_before))
         key_expr = Issue.repo_full_name + "#" + cast(Issue.number, SAString)
         orphaned = ~select(Issue.number).where(key_expr == Notification.issue_key).exists()
         res_notifs = await self.session.execute(
             delete(Notification).where((Notification.created_at < notifications_before) | orphaned)
         )
-        return res_issues.rowcount or 0, res_notifs.rowcount or 0
+        res_metrics = 0
+        if metrics_before_day:
+            res_metrics = (
+                await self.session.execute(delete(MetricsDaily).where(MetricsDaily.day < metrics_before_day))
+            ).rowcount or 0
+        return res_issues.rowcount or 0, res_notifs.rowcount or 0, res_metrics
 
     async def count_pending_notifications(self) -> int:
         row = await self.session.execute(
             select(func.count()).select_from(Notification).where(Notification.sent_at.is_(None))
         )
         return int(row.scalar_one())
+
+    async def watchlist_summary(self) -> dict[str, list[tuple[str, int, bool]]]:
+        """org -> [(full_name, stars, pinned)] for the daily funnel report / sync log."""
+        rows = await self.session.execute(
+            select(Repo.org_login, Repo.full_name, Repo.stars, Repo.is_pinned)
+            .where(Repo.monitored.is_(True))
+            .order_by(Repo.org_login, Repo.stars.desc())
+        )
+        summary: dict[str, list[tuple[str, int, bool]]] = {}
+        for org, full_name, stars, pinned in rows.all():
+            summary.setdefault(org, []).append((full_name, int(stars), bool(pinned)))
+        return summary
 
     # ------------------------------------------------------------------ helpers
 
