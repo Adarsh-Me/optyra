@@ -87,10 +87,13 @@ That shape has two real landmines, both fixable for $0:
    cron-job.org hitting `https://<service>/healthz` every ~10 minutes. When sleeping does
    happen, correctness survives (watermark + 72h catch-up self-heals on wake), but alerts
    arrive delayed/batched — decide if that's acceptable before relying on instant lane.
-2. **Render free Postgres expires (~30 days).** That kills the bot outright (watermarks,
-   dedupe keys, notification PKs all live there). If the DB is Render-free: migrate to
-   **Neon or Supabase free** before expiry (they don't expire; `pg_dump` restore is the
-   whole migration, and our asyncpg path handles their `?sslmode=`-style URLs already).
+2. **Aiven free Postgres = our DB (no expiry, always-on).** Confirmed 2026-09 — the
+   render-expiry landmine does not apply. Headroom: free plan gives 1 GiB disk; our
+   steady-state with the 90-day prune is ~150–400 MB (all watched-org issues, raw JSON
+   capped at the body-truncated payload). One-time check: Aiven console → Service metrics
+   → disk usage, confirm it's under ~50% and growing no more than ~50 MB/month.
+   `DATABASE_URL` from Aiven (with `?sslmode=require`) works as-is — `session.py` strips
+   driver-rejected params and asyncpg negotiates TLS itself (tested).
 
 Config changes (`config/orgs.yaml` etc.) live **baked in the image** — Render rebuilds on
 push to `main`, so an org-list change is a deploy. Healthz listens on `$PORT` automatically
