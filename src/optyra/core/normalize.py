@@ -15,6 +15,7 @@ class ParsedIssue:
     title: str
     state: str
     author: str | None
+    author_type: str  # GitHub user.type: "User" | "Bot" | "Organization" (v2 bot check)
     created_at: datetime
     labels: list[str]
     assignees: list[str]
@@ -75,15 +76,20 @@ def parse_search_item(item: dict, *, body_max_chars: int | None = None) -> Parse
     if body_max_chars is not None and isinstance(raw.get("body"), str):
         raw["body"] = raw["body"][:body_max_chars]
     author = None
+    author_type = "User"
     user = item.get("user")
-    if isinstance(user, dict) and user.get("login"):
-        author = str(user["login"])
+    if isinstance(user, dict):
+        if user.get("login"):
+            author = str(user["login"])
+        if user.get("type"):
+            author_type = str(user["type"])
     return ParsedIssue(
         repo_full_name=full_name,
         number=number,
         title=str(item.get("title") or ""),
         state=str(item.get("state") or "open"),
         author=author,
+        author_type=author_type,
         created_at=created_at,
         labels=_label_names(item),
         assignees=_assignee_logins(item),

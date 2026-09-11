@@ -1,4 +1,4 @@
-"""Scoring tests — report §11 weights, caps, and GSoC mapping."""
+"""Scoring tests — v2 recalibrated weights, caps, parked penalty, setup bonus."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from conftest import make_issue_item, utcnow
 from optyra.core.normalize import parse_search_item
-from optyra.core.scoring import map_gsoc_score, recency_points, score_issue
+from optyra.core.scoring import has_signal_label, recency_points, score_issue
 
 
 def _score(cfg, item, **kw):
@@ -15,25 +15,46 @@ def _score(cfg, item, **kw):
 
 
 def test_full_house_instant(cfg):
-    """Fresh + unassigned + no PR + good_first_issue + 28k stars pushed yesterday + repro body."""
+    """25 fresh + 20 unassigned + 15 no-PR + 20 gfi + 3 active + 4 stars(28k) + 5 body = 92."""
     breakdown = _score(cfg, make_issue_item(), repo_stars=28000, repo_pushed_at=utcnow() - timedelta(days=1))
-    assert breakdown.total == 95
+    assert breakdown.total == 92
     assert breakdown.components["recency"] == 25
     assert breakdown.components["unassigned"] == 20
     assert breakdown.components["no_linked_pr"] == 15
-    assert breakdown.components["labels"] == 15
-    assert breakdown.components["repo_activity"] == 10
-    assert breakdown.components["stars"] == 5
+    assert breakdown.components["labels"] == 20
+    assert breakdown.components["repo_activity"] == 3
+    assert breakdown.components["stars"] == 4
     assert breakdown.components["body_quality"] == 5
 
 
-def test_below_digest_threshold(cfg):
-    """Old, plain bug label, low stars: 6h band(12) + 20 + 15 + 3 + 0 + 0 + 5 = 55."""
-    breakdown = _score(
-        cfg,
-        make_issue_item(labels=("bug",), created_min_ago=300),
-        repo_stars=1000,
+def test_setup_minimal_bonus(cfg):
+    pushed = utcnow() - timedelta(days=1)
+    base = _score(cfg, make_issue_item(), repo_stars=28000, repo_pushed_at=pushed)
+    minimal = _score(cfg, make_issue_item(), repo_stars=28000, repo_pushed_at=pushed, setup_weight="minimal")
+    assert minimal.total == base.total + cfg.scoring.setup_minimal_bonus == 97
+    moderate = _score(
+        cfg, make_issue_item(), repo_stars=28000, repo_pushed_at=pushed, setup_weight="moderate"
     )
+    assert moderate.total == base.total
+
+
+def test_parked_penalty(cfg):
+    pushed = utcnow() - timedelta(days=1)
+    base = _score(cfg, make_issue_item(), repo_stars=28000, repo_pushed_at=pushed)
+    parked = _score(cfg, make_issue_item(), repo_stars=28000, repo_pushed_at=pushed, parked=True)
+    assert parked.total == base.total - cfg.scoring.parked_penalty == 84
+    assert parked.components["parked"] == -8
+
+
+def test_parked_cannot_go_negative(cfg):
+    item = make_issue_item(labels=("bug",), created_min_ago=40 * 60, body="short")
+    breakdown = _score(cfg, item, parked=True)
+    assert breakdown.total >= 0
+
+
+def test_below_digest_threshold(cfg):
+    """5h old, plain bug label, sub-10k stars (pinned edge): 12+20+15+3+0+0+5 = 55."""
+    breakdown = _score(cfg, make_issue_item(labels=("bug",), created_min_ago=300), repo_stars=1000)
     assert breakdown.total == 55
     assert breakdown.total < cfg.notify.digest_threshold
 
@@ -45,14 +66,18 @@ def test_assigned_and_linked_pr_remove_points(cfg):
     assert claimed.total == full.total - cfg.scoring.unassigned - cfg.scoring.no_linked_pr
 
 
-def test_score_capped_at_100(cfg):
-    breakdown = _score(cfg, make_issue_item(), repo_stars=28000)
-    assert breakdown.total <= 100
+def test_score_max_is_98(cfg):
+    breakdown = _score(
+        cfg,
+        make_issue_item(),
+        repo_stars=60000,
+        repo_pushed_at=utcnow() - timedelta(days=1),
+        setup_weight="minimal",
+    )
+    assert breakdown.total == 98  # 25+20+15+20+3+5+5+5 — under the cap by design
 
 
 def test_recency_bands(cfg):
-    from optyra.core.normalize import parse_search_item
-
     cases = [(29, 25), (61, 20), (5 * 60, 12), (23 * 60, 6), (25 * 60, 0)]
     for minutes, expected in cases:
         parsed = parse_search_item(make_issue_item(created_min_ago=minutes))
@@ -61,62 +86,25 @@ def test_recency_bands(cfg):
 
 def test_label_alias_mapping(cfg):
     item = make_issue_item(labels=("good first issue 🌱",))
-    assert _score(cfg, item).components["labels"] == 15
+    assert _score(cfg, item).components["labels"] == 20
     item = make_issue_item(labels=("up-for-grabs",))
-    assert _score(cfg, item).components["labels"] == 5
+    assert _score(cfg, item).components["labels"] == 6
 
 
-def test_label_points_capped_at_15(cfg):
+def test_label_points_capped_at_20(cfg):
     item = make_issue_item(labels=("good first issue", "help wanted", "bug", "enhancement"))
-    assert _score(cfg, item).components["labels"] == 15
+    assert _score(cfg, item).components["labels"] == 20  # 20+12+3+3=38 -> cap
 
 
-def test_stars_tiers(cfg):
+def test_stars_tiers_v2(cfg):
     item = make_issue_item()
-    for stars, expected in ((11000, 5), (6000, 3), (2500, 2), (1000, 0)):
+    for stars, expected in ((51000, 5), (25000, 4), (12000, 3), (9000, 0)):
         assert _score(cfg, item, repo_stars=stars).components["stars"] == expected
 
 
-def test_gsoc_years_mapping(cfg):
-    base = dict(has_mega_repo=False, newcomer_ratio=None, median_triage_hours=None, cfg=cfg.scoring)
-    for years, expected in ((6, 40), (5, 30), (4, 30), (3, 20), (2, 20), (1, 10), (0, 0)):
-        score, _ = map_gsoc_score(gsoc_years=list(range(2026 - years, 2026)), current_year=2026, **base)
-        assert score == expected, years
-
-
-def test_gsoc_full_components(cfg):
-    score, components = map_gsoc_score(
-        gsoc_years=[2020, 2021, 2022, 2023, 2024, 2025],
-        has_mega_repo=True,
-        newcomer_ratio=0.25,
-        median_triage_hours=20.0,
-        cfg=cfg.scoring,
-        current_year=2026,
-    )
-    assert components == {"gsoc_years": 40, "mega_repo": 20, "newcomer_ratio": 20, "triage": 20}
-    assert score == 100
-
-
-def test_gsoc_insufficient_data_scores_zero(cfg):
-    score, components = map_gsoc_score(
-        gsoc_years=[],
-        has_mega_repo=False,
-        newcomer_ratio=None,  # <20 issues in 30d -> no trustworthy ratio
-        median_triage_hours=None,  # no timeline samples yet
-        cfg=cfg.scoring,
-        current_year=2026,
-    )
-    assert score == 0 and components["newcomer_ratio"] == 0 and components["triage"] == 0
-
-
-def test_gsoc_partial_ratio_and_slow_triage(cfg):
-    score, components = map_gsoc_score(
-        gsoc_years=[2025],
-        has_mega_repo=False,
-        newcomer_ratio=0.10,
-        median_triage_hours=90.0,
-        cfg=cfg.scoring,
-        current_year=2026,
-    )
-    assert components == {"gsoc_years": 10, "mega_repo": 0, "newcomer_ratio": 10, "triage": 10}
-    assert score == 30
+def test_signal_labels(cfg):
+    assert has_signal_label(["good first issue"], cfg.scoring) is True
+    assert has_signal_label(["help wanted"], cfg.scoring) is True
+    assert has_signal_label(["up-for-grabs"], cfg.scoring) is True  # alias -> easy
+    assert has_signal_label(["bug"], cfg.scoring) is False
+    assert has_signal_label(["performance"], cfg.scoring) is False

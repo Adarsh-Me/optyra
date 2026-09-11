@@ -14,7 +14,7 @@ contract between the two roles is `.env` (see `deploy/.env.example`).
    # copy deploy/ and config/ from the repo (or clone the repo and symlink)
    cp deploy/.env.example /opt/optyra/.env && chmod 600 /opt/optyra/.env
    # edit /opt/optyra/.env: OPTYRA_IMAGE, POSTGRES_PASSWORD, GH_TOKEN, TELEGRAM_*
-   cp -r config /opt/optyra/config   # curate config/orgs.yaml (tiers + gsoc_years)
+   cp -r config /opt/optyra/config   # curate config/orgs.yaml (watch.orgs, pinned_repos, blocked_owners)
    ```
 3. Point `OPTYRA_IMAGE` at your GHCR image (pushed by the release workflow when you tag
    `v0.1.0`). If the repo is private, `docker login ghcr.io` with a PAT that has
@@ -68,10 +68,35 @@ After any `.env` change: `docker compose up -d` (recreates the worker with new e
 |---|---|---|
 | `/healthz` down | `docker compose ps`, `docker compose logs worker` | worker crash → `docker compose up -d worker`; check Postgres healthy |
 | `last_sweep_polled: 0` for long | worker logs | all orgs breaker-tripped? look for rate-limit warnings |
-| `github_rate_remaining` low/0 | logs for `Retry-After` / reset sleeps | expected during catch-up; if persistent, raise tier2 interval |
+| `github_rate_remaining` low/0 | logs for `Retry-After` / reset sleeps | expected during catch-up; if persistent, raise `poll.interval_seconds` |
 | Telegram silent | logs `telegram send rejected` | wrong chat_id/token; bot must be started by the user first |
 | DB filling up | `docker compose exec postgres psql -U optyra -c '\l+'` | pruning runs daily (90d retention); check `maintenance` logs |
 | "another optyra worker already holds the advisory lock" | two workers running | `docker compose ps` — scale worker to exactly 1 |
 
 Security posture: Postgres has no published port; healthz is loopback-only (reach over
 Tailscale/SSH); secrets only in `.env` (chmod 600); all traffic is outbound HTTPS.
+
+## 6. Render notes (current deployment — DevOps: Adarsh)
+
+The worker runs as a Render **web service** (a background worker is paid-only on free).
+That shape has two real landmines, both fixable for $0:
+
+1. **Free web services sleep ~15 min after the last inbound HTTP request.** The
+   Healthchecks.io ping is *outbound* — it proves liveness but does **not** keep the
+   instance awake. Without a pinger, polling silently stalls. Fix (free): UptimeRobot or
+   cron-job.org hitting `https://<service>/healthz` every ~10 minutes. When sleeping does
+   happen, correctness survives (watermark + 72h catch-up self-heals on wake), but alerts
+   arrive delayed/batched — decide if that's acceptable before relying on instant lane.
+2. **Aiven free Postgres = our DB (no expiry, always-on).** Confirmed 2026-09 — the
+   render-expiry landmine does not apply. Headroom: free plan gives 1 GiB disk; our
+   steady-state with the 90-day prune is ~150–400 MB (all watched-org issues, raw JSON
+   capped at the body-truncated payload). One-time check: Aiven console → Service metrics
+   → disk usage, confirm it's under ~50% and growing no more than ~50 MB/month.
+   `DATABASE_URL` from Aiven (with `?sslmode=require`) works as-is — `session.py` strips
+   driver-rejected params and asyncpg negotiates TLS itself (tested).
+
+Config changes (`config/orgs.yaml` etc.) live **baked in the image** — Render rebuilds on
+push to `main`, so an org-list change is a deploy. Healthz listens on `$PORT` automatically
+(Render injects it; see `ops.healthz_port`); the advisory-lock handoff covers overlapping
+deploys. Rollback in Render dashboard: rollback to previous deploy — schema is additive,
+v2 columns are ignored by older code.

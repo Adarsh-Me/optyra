@@ -2,7 +2,7 @@
 
 Usage:
     export GH_TOKEN=github_pat_...
-    python scripts/spike.py [org ...]        # defaults to the first 5 orgs in config/orgs.yaml
+    python scripts/spike.py [org-or-repo ...]   # defaults to the watch set in config/orgs.yaml
 
 Prints the monitored repos per org and a ranked 24 h issue list — the exact output that
 validated the whole project concept in the report. Read-only, no DB, no notifications.
@@ -26,7 +26,7 @@ from optyra.github.client import GitHubClient
 
 async def main() -> None:
     cfg = load_config()
-    orgs = [entry.login for entry in cfg.orgs]
+    orgs = list(cfg.watch.orgs)
     args = sys.argv[1:]
     orgs = args if args else orgs[:5]
     print(f"spike: orgs={orgs} min_stars={cfg.sync.min_stars} (token ok)")
@@ -49,13 +49,28 @@ async def main() -> None:
             for repo in repos:
                 monitored[repo.full_name.lower()] = repo
 
+        # pinned repos (personal accounts invisible to org:) are polled with repo: queries
+        for pinned in cfg.watch.pinned_repos:
+            try:
+                payload = await gh.get_repo(pinned)
+                parsed_repo = parse_repo_item(payload)
+                if parsed_repo:
+                    monitored[parsed_repo.full_name.lower()] = parsed_repo
+                    print(f"   pinned: {parsed_repo.full_name} stars={parsed_repo.stars:,}")
+            except Exception as exc:
+                print(f"   pinned {pinned} failed: {exc!r}")
+
         since = datetime.now(UTC) - timedelta(hours=24)
         ranked = []
-        for org in orgs:
+        scopes = orgs + ([list(cfg.watch.pinned_repos)] if cfg.watch.pinned_repos else [])
+        for scope in scopes:
             try:
-                items = await gh.search_issues(org, since=since, max_pages=2)
+                if isinstance(scope, list):
+                    items = await gh.search_issues_repos(scope, since=since, max_pages=2)
+                else:
+                    items = await gh.search_issues(scope, since=since, max_pages=2)
             except Exception as exc:
-                print(f"   (issue search failed for {org}: {exc!r})")
+                print(f"   (issue search failed for {scope}: {exc!r})")
                 continue
             for item in items:
                 parsed = parse_search_item(item)

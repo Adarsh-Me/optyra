@@ -44,10 +44,6 @@ def cfg(monkeypatch) -> AppConfig:
     return load_config(REPO_ROOT / "config")
 
 
-def make_gh_token(monkeypatch) -> None:
-    monkeypatch.setenv("GH_TOKEN", "test-gh-token-1234567890abcdef")
-
-
 # ------------------------------------------------------------------ database
 
 
@@ -66,7 +62,15 @@ async def db_factory(tmp_path):
     await ensure_schema(engine)
     if url:
         async with engine.begin() as conn:
-            for table in ("issues", "notifications", "repos", "orgs", "poll_state", "meta"):
+            for table in (
+                "issues",
+                "notifications",
+                "repos",
+                "orgs",
+                "poll_state",
+                "metrics_daily",
+                "meta",
+            ):
                 await conn.execute(text(f"DELETE FROM {table}"))
     yield create_session_factory(engine)
     await engine.dispose()
@@ -76,7 +80,7 @@ async def db_factory(tmp_path):
 
 
 def make_issue_item(
-    repo: str = "apache/kafka",
+    repo: str = "acme/widgets",
     number: int = 1,
     *,
     title: str = "NullPointerException in stream rebalance",
@@ -84,6 +88,7 @@ def make_issue_item(
     labels: tuple[str, ...] = ("good first issue",),
     assignees: tuple[str, ...] = (),
     author: str = "alice",
+    author_type: str = "User",
     created_min_ago: int = 5,
 ) -> dict:
     if body is None:
@@ -98,12 +103,25 @@ def make_issue_item(
         "title": title,
         "state": "open",
         "created_at": gh_time(utcnow() - timedelta(minutes=created_min_ago)),
-        "user": {"login": author},
+        "user": {"login": author, "type": author_type},
         "labels": [{"name": label} for label in labels],
         "assignees": [{"login": a} for a in assignees],
         "repository_url": f"https://api.github.com/repos/{repo}",
         "html_url": f"https://github.com/{repo}/issues/{number}",
         "body": body,
+    }
+
+
+def make_repo_item(full_name: str = "acme/widgets", *, stars: int = 28000) -> dict:
+    owner = full_name.split("/")[0]
+    return {
+        "id": abs(hash(full_name)) % 1000000,
+        "full_name": full_name,
+        "owner": {"login": owner},
+        "stargazers_count": stars,
+        "language": "Python",
+        "archived": False,
+        "pushed_at": gh_time(utcnow() - timedelta(days=1)),
     }
 
 
@@ -127,34 +145,21 @@ def issue_values(number: int = 1, **overrides) -> dict:
     return values
 
 
-def make_repo_item(full_name: str = "apache/kafka", *, stars: int = 28000) -> dict:
-    owner = full_name.split("/")[0]
-    return {
-        "id": abs(hash(full_name)) % 1000000,
-        "full_name": full_name,
-        "owner": {"login": owner},
-        "stargazers_count": stars,
-        "language": "Python",
-        "archived": False,
-        "pushed_at": gh_time(utcnow() - timedelta(days=1)),
-    }
-
-
 class FakeGitHub:
     """Routes GitHub API requests from GitHubClient through an in-memory world."""
 
     def __init__(self) -> None:
-        self.search_issues_items: dict[str, list[dict]] = {}
+        self.search_issues_items: dict[str, list[dict]] = {}  # keyed by org OR repo
         self.search_repo_items: dict[str, list[dict]] = {}
         self.issues: dict[tuple[str, int], dict] = {}
         self.timelines: dict[tuple[str, int], list[dict]] = {}
+        self.repos: dict[str, dict] = {}  # full_name -> REST repo payload (get_repo)
         self.calls: list[str] = []
-        self.fail_next_n: dict[str, int] = {}
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self._handle)
 
-    def _json(self, payload: dict, headers: dict | None = None) -> httpx.Response:
+    def _json(self, payload: Any, headers: dict | None = None) -> httpx.Response:
         return httpx.Response(200, json=payload, headers=headers or {})
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -164,8 +169,22 @@ class FakeGitHub:
 
         if path == "/search/issues":
             query = url.params.get("q", "")
-            org = query.split()[0].removeprefix("org:")
-            items = self.search_issues_items.get(org, [])
+            tokens = query.split()
+            items: list[dict] = []
+            seen: set[tuple[str, int]] = set()
+            for token in tokens:
+                if token.startswith("org:"):
+                    for item in self.search_issues_items.get(token[4:], []):
+                        key = (item["repository_url"], item["number"])
+                        if key not in seen:
+                            seen.add(key)
+                            items.append(item)
+                elif token.startswith("repo:"):
+                    for item in self.search_issues_items.get(token[5:], []):
+                        key = (item["repository_url"], item["number"])
+                        if key not in seen:
+                            seen.add(key)
+                            items.append(item)
             return self._json({"total_count": len(items), "items": items})
 
         if path == "/search/repositories":
@@ -186,6 +205,8 @@ class FakeGitHub:
             return self._json(issue)
         if len(parts) == 3 and parts[0] == "repos":
             full_name = f"{parts[1]}/{parts[2]}"
+            if full_name in self.repos:
+                return self._json(self.repos[full_name])
             for items in self.search_repo_items.values():
                 for item in items:
                     if item["full_name"] == full_name:
@@ -276,7 +297,7 @@ def make_services(
         cfg=cfg,
         session_factory=db_factory,
         gh=gh_client,
-        health=HealthState(),
+        health=HealthState(config_hash=cfg.config_hash),
         tg=tg_notifier,
         enricher=enricher,
     )

@@ -1,21 +1,41 @@
 # LLM enrichment criteria — versioned in config, NOT hardcoded (report 02prd §4).
-# The system prompt is assembled from this file; tune your personal no-go list without touching code.
+# The system prompt is assembled from this file; tune your personal no-go criteria without
+# touching code. v2: adds the setup_weight classification (software-only, no heavy external
+# downloads filter). The model returns strict JSON per `output_schema`.
 #
-# The model returns strict JSON per the schema in `output_schema`. `worth_attempting: false`
-# is treated as an annotation/demotion on the notification — it never drops an issue.
+# Enforcement policy lives in config.yaml `ai.*`: heavy -> drop (hard) or digest-only (soft)
+# per org; failures fail-open (never block a notification).
 
-version: 1
+version: 2
 
 task: >
-  You are screening newly created GitHub issues for a contributor looking for GSoC-style
-  contribution opportunities. Decide whether this specific issue is worth the contributor
-  attempting, and summarize it in at most two plain-text lines for a mobile notification.
+  You are screening newly created GitHub issues for a contributor looking for mergeable
+  code contributions in large open-source projects. Decide (a) whether this specific issue
+  is worth the contributor attempting and (b) how much environment setup it demands, and
+  summarize it in at most two plain-text lines for a mobile notification.
 
 output_schema:
   summary: "string, <=2 lines (~220 chars max), plain text, no markdown"
   worth_attempting: "boolean"
   reason_codes: "array of strings, subset of allowed_reason_codes, 0-3 items"
   difficulty: "one of: easy | medium | hard | unclear"
+  setup_weight: "one of: minimal | moderate | heavy"
+  setup_reason: "one short line explaining the setup verdict"
+
+# Calibrate setup_weight exactly like this (user decision 2026-09:
+# building THE PROJECT ITSELF once is moderate — the project is not 'other software'):
+setup_scale:
+  minimal: >
+    Language runtime + package manager only (pip/npm/apt of ordinary packages). The repo is
+    usable via its published package, a web UI, or a small clone with a short documented build.
+  moderate: >
+    ONE standard clone+build of this project itself (cmake/make/gradle/scons/ninja, expected
+    under ~1 hour on a normal laptop) or pulling one common Docker image. This is ALLOWED.
+  heavy: >
+    Large external toolchains (Xcode, Android NDK/SDK, Chromium-class or multi-GB compiler
+    builds, Visual Studio workloads), proprietary/licensed tools or APIs, special hardware
+    (GPU, cameras, dev boards, cluster), a different OS requirement, or reproduction needing
+    a heavyweight service stack. This is DROPPED by default.
 
 allowed_reason_codes:
   - good-fit          # well-scoped, actionable, newcomer-reachable
@@ -43,4 +63,9 @@ rules:
   - Judge only from the provided title, body, labels, and repo metadata. Do not invent details.
   - summary must be self-contained (understandable without opening the issue) and factual.
   - reason_codes must only come from allowed_reason_codes.
+  - Classify setup_weight using the setup_scale definitions; building this project itself
+    once is moderate, NOT heavy. heavy requires EXTERNAL toolchains, proprietary tools,
+    special hardware, or a different OS.
+  - If setup_weight is heavy, also include the matching reason code (env-heavy,
+    proprietary-tool, or huge-setup).
   - Respond with a single JSON object and nothing else.

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from optyra.db.models import SCHEMA_VERSION, Base, MetaInfo
+from optyra.db.models import ADDED_COLUMNS, SCHEMA_VERSION, Base, MetaInfo
 
 logger = logging.getLogger(__name__)
 
@@ -69,23 +69,53 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 
 
 async def ensure_schema(engine: AsyncEngine) -> None:
-    """Idempotent bootstrap: create tables if missing and stamp the schema version.
+    """Idempotent bootstrap: create tables if missing, add v2 columns to existing v1
+    tables (Render's deployed DB upgrades in place), and stamp the schema version.
 
-    Keeps deployment a plain `docker compose up -d` (no migration step). Future column
-    additions should migrate here or move to Alembic once the schema churns.
+    Keeps deployment a plain restart (no migration step). Column drops/renames would
+    move to Alembic once the schema churns.
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_add_columns(conn)
         exists = await conn.execute(text("SELECT value FROM meta WHERE key = 'schema_version'"))
         row = exists.first()
         if row is None:
             await conn.execute(MetaInfo.__table__.insert().values(key="schema_version", value=SCHEMA_VERSION))
         elif row[0] != SCHEMA_VERSION:
-            logger.warning(
-                "database schema version %s differs from expected %s; continuing",
-                row[0],
-                SCHEMA_VERSION,
+            logger.info("stamping schema version %s (was %s)", SCHEMA_VERSION, row[0])
+            await conn.execute(
+                text("UPDATE meta SET value = :v WHERE key = 'schema_version'"),
+                {"v": SCHEMA_VERSION},
             )
+
+
+async def _migrate_add_columns(conn) -> None:
+    """Additive ADD COLUMN for tables that already exist from a previous version."""
+    from sqlalchemy import inspect
+    from sqlalchemy.exc import OperationalError
+
+    def _columns(sync_conn, table: str) -> set[str]:
+        return {c["name"] for c in inspect(sync_conn).get_columns(table)}
+
+    present: dict[str, set[str]] = {}
+    for table in ADDED_COLUMNS:
+        present[table] = await conn.run_sync(lambda c, t=table: _columns(c, t))
+
+    is_pg = conn.dialect.name == "postgresql"
+    for table, additions in ADDED_COLUMNS.items():
+        for column, pg_type, sqlite_type in additions:
+            if column in present.get(table, set()):
+                continue
+            sql_type = pg_type if is_pg else sqlite_type
+            if is_pg:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}"))
+            else:
+                try:  # sqlite lacks IF NOT EXISTS for ADD COLUMN
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+                except OperationalError:
+                    pass  # already present
+            logger.info("migration: added %s.%s", table, column)
 
 
 class WorkerLock:
