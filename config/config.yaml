@@ -88,15 +88,19 @@ scoring:
   setup_minimal_bonus: 5        # AI verdict setup_weight=minimal -> rank preference
 
 # --- Notifications: two lanes + v2 flood defenses (nixpkgs-class repos are firehoses) ---
+# Recalibrated 2026-09-13: v2 removed 15 dead scoring points but kept v1's 85/70 thresholds,
+# so a typical fresh issue tops out at 66-78 and NOTHING was ever notified (funnel: 35 seen,
+# 0 notified). New scale: digest 60 catches fresh/6h issues; instant 75 = fresh + unassigned +
+# no PR + real label/quality; lane gate off (AI verdict still annotates, never blocks).
 notify:
-  instant_threshold: 85         # >= this: immediate Telegram (exempt from caps)
-  digest_threshold: 70          # 70..84 -> digest lane
+  instant_threshold: 75         # >= this: immediate Telegram (exempt from caps)
+  digest_threshold: 60          # 60..74 -> digest lane
   digest_interval_minutes: 20
   max_messages_per_minute: 15
   sender_concurrency: 2
   per_owner_daily_cap: 5        # digest sends per owner per UTC day, budgeted best-first
   digest_max_items: 20          # per-flush send cap; overflow suppressed (visible in funnel)
-  lane_signal_required: true    # digest lane needs a newcomer label OR AI worth=yes
+  lane_signal_required: false   # was true: needed newcomer label OR AI worth=yes -> 0 sends
   instant_lane_bypasses_gate: true
 
 telegram:
